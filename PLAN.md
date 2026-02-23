@@ -160,6 +160,53 @@ The minimum viable product — watch a folder, upload new files, show status in 
 
 ---
 
+## API Key Permissions Required
+
+ImmichSync requires an API key with the following permissions. On Immich server
+versions prior to v1.138.0 the key must use `all` permissions. On newer servers
+create a key with at least these scopes:
+
+| Permission | Used By |
+|---|---|
+| `asset.upload` | Upload photos/videos (`POST /api/assets`) |
+| `asset.read` | Bulk duplicate check (`POST /api/assets/bulk-upload-check`) |
+| `album.create` | Auto-create albums (`POST /api/albums`) |
+| `album.read` | List albums to find existing ones (`GET /api/albums`) |
+| `albumAsset.create` | Add assets to albums (`PUT /api/albums/{id}/assets`) |
+| `server.read` | Ping / server info (`GET /api/server/ping`, `/api/server/info`) |
+| `auth.read` | Validate API key (`GET /api/users/me`) |
+
+When configuring an API key in the Immich web UI (User Settings > API Keys),
+grant these specific permissions or use `all` for simplicity.
+
+---
+
+## Future: OAuth / OIDC Authentication
+
+Immich supports authentication via OpenID Connect (OIDC), configured by the
+server administrator. Currently ImmichSync only supports API key authentication.
+
+A future release should add OAuth support:
+
+- **Login flow:** Open system browser to the Immich server's OAuth authorization
+  URL. Listen on a localhost callback (e.g. `http://localhost:PORT/callback`) for
+  the redirect. Exchange the authorization code for an access + refresh token.
+- **Token storage:** Encrypt tokens via DPAPI (same as API keys).
+- **Token refresh:** Automatically refresh expired tokens using the refresh token.
+- **Scopes:** Immich's OIDC defaults to `openid email profile`.
+- **Mobile redirect:** Immich uses `app.immich:///oauth-callback` for mobile;
+  desktop apps should use the localhost redirect approach.
+- **Fallback:** Keep API key auth as primary — OAuth requires server admin to
+  configure an OIDC provider, which many self-hosters won't have.
+- **UI:** Add "Login with OAuth" button to Connection tab alongside the API key
+  field. If OAuth session is active, show "Logged in as {email}" with a logout
+  button.
+
+Reference: [Immich OAuth docs](https://docs.immich.app/administration/oauth/),
+[Immich API docs](https://api.immich.app/getting-started)
+
+---
+
 ## Phase 4: Ship It
 
 ### 4.1 Installer

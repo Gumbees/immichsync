@@ -4,23 +4,26 @@ use eframe::egui;
 
 const STRIPE_LINK: &str = "https://buy.stripe.com/8x214n0IjaoL0zwcsj4AU00";
 
-/// Open the About dialog on a separate thread (non-blocking).
+/// Open the About dialog (blocking).
+///
+/// Call on the main thread — eframe's event loop will continue to dispatch
+/// Win32 messages for the tray icon while the dialog is open.
 pub fn show_about() {
-    std::thread::spawn(|| {
-        let options = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_inner_size([340.0, 220.0])
-                .with_title("About ImmichSync")
-                .with_resizable(false),
-            ..Default::default()
-        };
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([340.0, 220.0])
+            .with_title("About ImmichSync")
+            .with_resizable(false),
+        ..Default::default()
+    };
 
-        let _ = eframe::run_native(
-            "About ImmichSync",
-            options,
-            Box::new(|_cc| Ok(Box::new(AboutApp))),
-        );
-    });
+    if let Err(e) = eframe::run_native(
+        "About ImmichSync",
+        options,
+        Box::new(|_cc| Ok(Box::new(AboutApp))),
+    ) {
+        tracing::error!(error = %e, "Failed to open About dialog");
+    }
 }
 
 struct AboutApp;

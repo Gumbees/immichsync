@@ -34,9 +34,10 @@ impl Default for Settings {
     }
 }
 
-/// Open the settings window on the current thread (blocking).
+/// Open the settings window (blocking).
 ///
-/// Call from a spawned `std::thread` so it doesn't block the main event loop.
+/// Call on the main thread — eframe's event loop will continue to dispatch
+/// Win32 messages for the tray icon while settings is open.
 /// When the user clicks Save, the modified config is sent through `result_tx`
 /// so the `App` can apply changes at runtime.
 pub fn show_settings(config: Config, result_tx: Option<Sender<Config>>) {
@@ -81,11 +82,13 @@ pub fn show_settings(config: Config, result_tx: Option<Sender<Config>>) {
         result_tx,
     };
 
-    let _ = eframe::run_native(
+    if let Err(e) = eframe::run_native(
         "ImmichSync Settings",
         options,
         Box::new(|_cc| Ok(Box::new(app))),
-    );
+    ) {
+        tracing::error!(error = %e, "Failed to open Settings window");
+    }
 }
 
 // ── Tab enum ────────────────────────────────────────────────────────────────

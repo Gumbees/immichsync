@@ -44,6 +44,8 @@ pub struct FolderWatcher {
     path: PathBuf,
     filter: Arc<FileFilter>,
     event_tx: mpsc::Sender<WatchEvent>,
+    /// Tokio runtime handle — used to spawn async tasks from the notify callback thread.
+    rt_handle: tokio::runtime::Handle,
     /// The debouncer handle — kept alive so the watcher keeps running.
     /// `None` before `start()` or after `stop()`.
     debouncer: Arc<Mutex<Option<Debouncer<notify::RecommendedWatcher, RecommendedCache>>>>,
@@ -56,11 +58,17 @@ impl FolderWatcher {
     /// - `path`     — directory to watch (recursively)
     /// - `filter`   — file filter applied to every event
     /// - `event_tx` — channel on which ready files are reported
-    pub fn new(path: PathBuf, filter: FileFilter, event_tx: mpsc::Sender<WatchEvent>) -> Self {
+    pub fn new(
+        path: PathBuf,
+        filter: FileFilter,
+        event_tx: mpsc::Sender<WatchEvent>,
+        rt_handle: tokio::runtime::Handle,
+    ) -> Self {
         Self {
             path,
             filter: Arc::new(filter),
             event_tx,
+            rt_handle,
             debouncer: Arc::new(Mutex::new(None)),
         }
     }
@@ -74,10 +82,11 @@ impl FolderWatcher {
         let filter = Arc::clone(&self.filter);
         let tx = self.event_tx.clone();
         let watch_path = self.path.clone();
+        let rt = self.rt_handle.clone();
 
-        // The debouncer callback runs on a thread owned by notify.
-        // We offload the write-completion check to a new tokio task so we
-        // don't block the notification thread during the 500 ms poll sleeps.
+        // The debouncer callback runs on a thread owned by notify — NOT a
+        // tokio thread. We use the runtime handle to spawn async tasks from
+        // the callback so the write-completion check runs on the tokio pool.
         let handler = move |result: DebounceEventResult| {
             match result {
                 Ok(events) => {
@@ -102,8 +111,7 @@ impl FolderWatcher {
                             }
 
                             let tx2 = tx.clone();
-                            // Spawn write-completion check as a tokio task.
-                            tokio::spawn(async move {
+                            rt.spawn(async move {
                                 write_complete_and_send(path, tx2).await;
                             });
                         }

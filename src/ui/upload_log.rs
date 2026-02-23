@@ -6,9 +6,10 @@ use eframe::egui;
 
 use crate::db::DbStore;
 
-/// Open the upload log viewer on the current thread (blocking).
+/// Open the upload log viewer (blocking).
 ///
-/// Call from a spawned `std::thread` so it doesn't block the main event loop.
+/// Call on the main thread — eframe's event loop will continue to dispatch
+/// Win32 messages for the tray icon while the log viewer is open.
 pub fn show_upload_log(db: Arc<DbStore>) {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -25,11 +26,13 @@ pub fn show_upload_log(db: Arc<DbStore>) {
         db,
     };
 
-    let _ = eframe::run_native(
+    if let Err(e) = eframe::run_native(
         "ImmichSync Upload Log",
         options,
         Box::new(|_cc| Ok(Box::new(app))),
-    );
+    ) {
+        tracing::error!(error = %e, "Failed to open Upload Log window");
+    }
 }
 
 // ── Filter ──────────────────────────────────────────────────────────────────

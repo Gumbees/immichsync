@@ -35,8 +35,6 @@ pub struct App {
     runtime: Arc<tokio::runtime::Runtime>,
     last_stats_update: Instant,
     paused: bool,
-    /// Receives updated config from the settings window.
-    settings_rx: Option<std::sync::mpsc::Receiver<Config>>,
     /// Track previous syncing state to detect transitions for notifications.
     was_syncing: bool,
     /// Notification manager.
@@ -63,7 +61,6 @@ impl App {
             runtime,
             last_stats_update: Instant::now(),
             paused: false,
-            settings_rx: None,
             was_syncing: false,
             notifications,
         }
@@ -169,9 +166,6 @@ impl App {
                 return;
             }
 
-            // Check for config updates from the settings window.
-            self.check_settings_update();
-
             // Periodically refresh tray with queue statistics.
             self.update_tray_stats();
 
@@ -210,7 +204,7 @@ impl App {
                         ) {
                             let filter = FileFilter::new();
                             if let Err(e) =
-                                engine.add_folder(pictures, filter, false)
+                                engine.add_folder(pictures, filter, false, self.runtime.handle().clone())
                             {
                                 warn!("Failed to add Pictures watcher: {}", e);
                             }
@@ -230,7 +224,7 @@ impl App {
                     let is_network =
                         folder.watch_mode == crate::db::WatchMode::Poll;
                     let filter = FileFilter::new();
-                    if let Err(e) = engine.add_folder(path, filter, is_network)
+                    if let Err(e) = engine.add_folder(path, filter, is_network, self.runtime.handle().clone())
                     {
                         warn!(path = %folder.path, error = %e, "Failed to add watcher");
                     }
@@ -276,12 +270,15 @@ impl App {
                 }
             }
             TrayAction::OpenSettings => {
+                // Run on main thread — eframe's event loop pumps all Win32
+                // messages, keeping the tray icon responsive while open.
                 let config = self.config.clone();
                 let (tx, rx) = std::sync::mpsc::channel();
-                self.settings_rx = Some(rx);
-                std::thread::spawn(move || {
-                    crate::ui::settings::show_settings(config, Some(tx));
-                });
+                crate::ui::settings::show_settings(config, Some(tx));
+                // Settings window has closed. Apply config if user clicked Save.
+                if let Ok(new_config) = rx.try_recv() {
+                    self.apply_new_config(new_config);
+                }
             }
             TrayAction::UploadNow => {
                 info!("Upload Now requested");
@@ -290,10 +287,7 @@ impl App {
                 crate::ui::about::show_about();
             }
             TrayAction::ViewLog => {
-                let db = self.db.clone();
-                std::thread::spawn(move || {
-                    crate::ui::upload_log::show_upload_log(db);
-                });
+                crate::ui::upload_log::show_upload_log(self.db.clone());
             }
             TrayAction::Quit => {
                 // Handled in run() directly.
@@ -301,13 +295,8 @@ impl App {
         }
     }
 
-    /// Check for updated config from settings window and apply changes.
-    fn check_settings_update(&mut self) {
-        let new_config = match self.settings_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
-            Some(cfg) => cfg,
-            None => return,
-        };
-
+    /// Apply a new config received from the settings window.
+    fn apply_new_config(&mut self, new_config: Config) {
         info!("Applying config update from settings");
 
         let server_changed = new_config.server.url != self.config.server.url

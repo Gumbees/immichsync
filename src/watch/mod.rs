@@ -119,6 +119,7 @@ impl WatchEngine {
         path: PathBuf,
         filter: FileFilter,
         is_network: bool,
+        rt_handle: tokio::runtime::Handle,
     ) -> Result<(), WatchError> {
         // Normalise the path (resolve `..`, trailing slashes, etc.)
         let path = match std::fs::canonicalize(&path) {
@@ -133,14 +134,20 @@ impl WatchEngine {
         let tx = self.event_tx.clone();
 
         let watcher: ActiveWatcher = if is_network {
-            let nw = NetworkWatcher::new(path.clone(), filter, tx, DEFAULT_POLL_INTERVAL);
+            let nw = NetworkWatcher::new(
+                path.clone(),
+                filter,
+                tx,
+                DEFAULT_POLL_INTERVAL,
+                rt_handle,
+            );
             nw.start().map_err(|e| WatchError::StartFailed {
                 path: path.clone(),
                 source: e,
             })?;
             ActiveWatcher::Network(nw)
         } else {
-            let fw = FolderWatcher::new(path.clone(), filter, tx);
+            let fw = FolderWatcher::new(path.clone(), filter, tx, rt_handle);
             fw.start().map_err(|e| WatchError::StartFailed {
                 path: path.clone(),
                 source: e,
@@ -231,6 +238,13 @@ impl Drop for WatchEngine {
 mod tests {
     use super::*;
 
+    fn test_rt_handle() -> tokio::runtime::Handle {
+        // Create a runtime for tests; the handle outlives the runtime's drop
+        // because watchers keep it alive internally.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.handle().clone()
+    }
+
     #[test]
     fn test_engine_starts_empty() {
         let engine = WatchEngine::new();
@@ -248,9 +262,10 @@ mod tests {
     fn test_add_and_remove_folder() {
         let dir = tempfile::tempdir().unwrap();
         let mut engine = WatchEngine::new();
+        let handle = test_rt_handle();
 
         engine
-            .add_folder(dir.path().to_path_buf(), FileFilter::new(), false)
+            .add_folder(dir.path().to_path_buf(), FileFilter::new(), false, handle.clone())
             .expect("add_folder should succeed");
 
         assert_eq!(engine.watcher_count(), 1);
@@ -268,12 +283,13 @@ mod tests {
     fn test_add_duplicate_returns_error() {
         let dir = tempfile::tempdir().unwrap();
         let mut engine = WatchEngine::new();
+        let handle = test_rt_handle();
 
         engine
-            .add_folder(dir.path().to_path_buf(), FileFilter::new(), false)
+            .add_folder(dir.path().to_path_buf(), FileFilter::new(), false, handle.clone())
             .expect("first add should succeed");
 
-        let result = engine.add_folder(dir.path().to_path_buf(), FileFilter::new(), false);
+        let result = engine.add_folder(dir.path().to_path_buf(), FileFilter::new(), false, handle);
         assert!(
             matches!(result, Err(WatchError::AlreadyWatching(_))),
             "Expected AlreadyWatching error"
@@ -296,12 +312,13 @@ mod tests {
         let dir1 = tempfile::tempdir().unwrap();
         let dir2 = tempfile::tempdir().unwrap();
         let mut engine = WatchEngine::new();
+        let handle = test_rt_handle();
 
         engine
-            .add_folder(dir1.path().to_path_buf(), FileFilter::new(), false)
+            .add_folder(dir1.path().to_path_buf(), FileFilter::new(), false, handle.clone())
             .unwrap();
         engine
-            .add_folder(dir2.path().to_path_buf(), FileFilter::new(), false)
+            .add_folder(dir2.path().to_path_buf(), FileFilter::new(), false, handle)
             .unwrap();
 
         assert_eq!(engine.watcher_count(), 2);

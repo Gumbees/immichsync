@@ -69,6 +69,8 @@ pub struct NetworkWatcher {
     filter: Arc<FileFilter>,
     event_tx: mpsc::Sender<WatchEvent>,
     poll_interval: Duration,
+    /// Tokio runtime handle — used to spawn async tasks from the notify callback thread.
+    rt_handle: tokio::runtime::Handle,
     /// The live debouncer; `None` when stopped.
     debouncer: Arc<Mutex<Option<Box<dyn AnyDebouncer>>>>,
 }
@@ -86,12 +88,14 @@ impl NetworkWatcher {
         filter: FileFilter,
         event_tx: mpsc::Sender<WatchEvent>,
         poll_interval: Duration,
+        rt_handle: tokio::runtime::Handle,
     ) -> Self {
         Self {
             path,
             filter: Arc::new(filter),
             event_tx,
             poll_interval,
+            rt_handle,
             debouncer: Arc::new(Mutex::new(None)),
         }
     }
@@ -220,7 +224,7 @@ impl NetworkWatcher {
         let tx = self.event_tx.clone();
         let watch_path = self.path.clone();
 
-        let handler = build_handler(filter, tx);
+        let handler = build_handler(filter, tx, self.rt_handle.clone());
 
         let mut debouncer = new_debouncer(DEBOUNCE_WINDOW, None, handler)
             .map_err(|e| anyhow::anyhow!("Failed to create native debouncer: {}", e))?;
@@ -239,7 +243,7 @@ impl NetworkWatcher {
         let watch_path = self.path.clone();
         let poll_interval = self.poll_interval;
 
-        let handler = build_handler(filter, tx);
+        let handler = build_handler(filter, tx, self.rt_handle.clone());
 
         // `new_debouncer_opt` lets us supply custom notify::Config so we can
         // specify the poll interval, and infers T = PollWatcher from the
@@ -264,9 +268,13 @@ impl NetworkWatcher {
 }
 
 /// Build the shared debounce event handler for both native and poll modes.
+///
+/// The handler runs on a notify-owned thread, so we need the tokio runtime
+/// handle to spawn async write-completion tasks.
 fn build_handler(
     filter: Arc<FileFilter>,
     tx: mpsc::Sender<WatchEvent>,
+    rt: tokio::runtime::Handle,
 ) -> impl FnMut(DebounceEventResult) + Send + 'static {
     move |result: DebounceEventResult| match result {
         Ok(events) => {
@@ -298,7 +306,7 @@ fn build_handler(
                     }
 
                     let tx2 = tx.clone();
-                    tokio::spawn(async move {
+                    rt.spawn(async move {
                         write_complete_and_send(path, tx2).await;
                     });
                 }
