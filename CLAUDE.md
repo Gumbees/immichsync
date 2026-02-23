@@ -1,0 +1,132 @@
+# ImmichSync — Project Instructions
+
+## What This Is
+
+ImmichSync is a native Windows system tray app that watches folders and uploads photos/videos to an Immich server. Written in Rust, targeting Windows 10/11.
+
+## Architecture
+
+Read [ARCHITECTURE.md](ARCHITECTURE.md) for the full design. Read [PLAN.md](PLAN.md) for the implementation roadmap.
+
+Key components:
+- **Watch Engine** (`src/watch/`) — filesystem monitoring via `notify` crate
+- **Upload Pipeline** (`src/upload/`) — async upload workers via `tokio`
+- **API Client** (`src/api/`) — Immich REST API via `reqwest`
+- **State DB** (`src/db.rs`) — SQLite via `rusqlite` (bundled)
+- **UI** (`src/ui/`) — system tray via `tray-icon`, settings via `egui`
+- **Platform** (`src/platform/`) — Windows-specific integrations (Win32 APIs)
+
+## Tech Stack
+
+| What | Crate | Notes |
+|------|-------|-------|
+| Runtime | `tokio` | Full features |
+| HTTP | `reqwest` | Multipart, JSON, streaming |
+| Database | `rusqlite` | Bundled SQLite, WAL mode |
+| FS watch | `notify` + `notify-debouncer-full` | ReadDirectoryChangesW + poll fallback |
+| GUI | `egui` / `eframe` | Settings window only |
+| Tray | `tray-icon` + `winit` | System tray icon and menu |
+| Win32 | `windows` crate | Device detection, known folders, DPAPI |
+| Hashing | `sha1` | Matches Immich's internal checksum |
+| EXIF | `kamadak-exif` | Photo date extraction |
+| Logging | `tracing` | With file rotation via `tracing-appender` |
+| Config | `toml` + `serde` | `%APPDATA%\ImmichSync\config.toml` |
+
+## Conventions
+
+### Rust Style
+- Use `thiserror` for library-style errors in modules, `anyhow` at the application boundary
+- Prefer `tracing` macros (`info!`, `warn!`, `error!`, `debug!`) over `println!`
+- Use `tokio` for all async work — no blocking in async contexts
+- Enums for state machines (watch mode, queue status, album mode) — not string constants
+- Keep modules focused: one concern per file
+
+### Database
+- All schema lives in `src/db.rs`
+- WAL mode enabled on every connection open
+- All queue state transitions wrapped in transactions
+- Schema migrations tracked via `config` table (`schema_version` key)
+- Use parameterized queries — never interpolate values into SQL strings
+- Timestamps stored as ISO 8601 TEXT
+
+### Error Handling
+- API errors: typed via `thiserror` with variants for auth, network, server, and rate limit
+- Upload failures: retry with exponential backoff, persist error to queue entry
+- Watch failures: log and continue — one bad path shouldn't stop other watchers
+- DB errors: fatal on init, recoverable on individual operations
+
+### File Paths
+- All paths stored as UTF-8 strings in the database
+- Use `std::path::Path` / `PathBuf` in Rust code
+- Normalize paths before storage (consistent separators, no trailing slash)
+- Handle long paths (Windows `\\?\` prefix) where needed
+
+### Configuration
+- `config.toml` is the user-facing config (TOML, human-editable)
+- `state.db` is the internal state (SQLite, not user-editable)
+- Never store secrets in plaintext config — encrypt API keys via DPAPI + AES-256-GCM
+
+## Building
+
+```bash
+cargo build --release
+```
+
+Binary output: `target/release/immichsync.exe`
+
+This is a Windows-only project. Cross-compilation is not a goal.
+
+## Testing
+
+```bash
+cargo test
+```
+
+- Unit tests inline in modules
+- Integration tests in `tests/` directory
+- Mock Immich server in `tests/mock_server/` for upload testing
+- Don't test against real Immich servers in CI
+
+## Git Workflow
+
+- `main` branch is release-ready
+- Feature branches: `feature/description`
+- Bug fix branches: `fix/description`
+- Commits: conventional style (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`)
+- PRs: one feature or fix per PR
+
+## Key Design Decisions
+
+1. **SQLite over document DBs** — ACID transactions, WAL crash recovery, mature tooling, fast indexed queries. The data model is relational.
+2. **egui over Tauri** — No WebView2 dependency, ~5MB binary vs ~35MB, pure Rust stack.
+3. **Direct reqwest over `immich` crate** — We only need ~5 endpoints. Less dependency risk.
+4. **SHA-1 for hashing** — Matches Immich's internal checksum. Not for security, just content addressing.
+5. **`notify` with poll fallback** — Native `ReadDirectoryChangesW` for local/SMB, auto-fallback to polling for NFS/exotic filesystems.
+
+## Immich API Endpoints Used
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/server/ping` | GET | Health check |
+| `/api/server/info` | GET | Server info |
+| `/api/assets` | POST | Upload asset (multipart) |
+| `/api/assets/bulk-upload-check` | POST | Check duplicates before upload |
+| `/api/albums` | POST | Create album |
+| `/api/albums/{id}/assets` | PUT | Add assets to album |
+
+Auth: `x-api-key` header on all requests.
+
+## Duplicate Prevention
+
+Three layers:
+1. **Local DB check** — query `uploaded_files` by SHA-1 hash before uploading
+2. **Server bulk check** — `POST /api/assets/bulk-upload-check` with checksums
+3. **Server-side dedup** — Immich rejects duplicates on upload (last resort, wastes bandwidth)
+
+## Data Locations
+
+| What | Path |
+|------|------|
+| Config | `%APPDATA%\ImmichSync\config.toml` |
+| Database | `%APPDATA%\ImmichSync\state.db` |
+| Logs | `%APPDATA%\ImmichSync\logs\` |

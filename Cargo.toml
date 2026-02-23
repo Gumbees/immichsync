@@ -1,0 +1,98 @@
+[package]
+name = "immichsync"
+version = "0.1.0"
+edition = "2021"
+description = "Windows system tray app that syncs photos/videos to Immich"
+license = "Apache-2.0"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Filesystem watching
+notify = "7"
+notify-debouncer-full = "0.4"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["multipart", "json", "stream"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Windows APIs
+windows = { version = "0.58", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_UI_Shell",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    # single_instance.rs  — CreateMutexW
+    "Win32_System_Threading",
+    # autostart.rs        — RegOpenKeyExW, RegSetValueExW, RegDeleteValueW, etc.
+    "Win32_System_Registry",
+    # known_folders.rs    — CoTaskMemFree (frees PWSTR from SHGetKnownFolderPath)
+    "Win32_System_Com",
+] }
+
+# System tray
+tray-icon = "0.19"
+winit = "0.30"
+
+# GUI
+eframe = "0.29"
+egui = "0.29"
+
+# Hashing
+sha1 = "0.10"
+
+# EXIF parsing
+kamadak-exif = "0.5"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tracing-appender = "0.2"
+
+# Utility
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+dirs = "5"
+hostname = "0.4"
+glob = "0.3"
+thiserror = "2"
+anyhow = "1"
+
+# Encryption for API key storage
+aes-gcm = "0.10"
+base64 = "0.22"
+
+# Async trait support (used in upload/worker.rs and api/)
+async-trait = "0.1"
+
+# Folder picker dialog
+rfd = "0.15"
+
+# Windows toast notifications
+winrt-notification = "0.5"
+
+# Open URLs in browser
+open = "5"
+
+# Streaming I/O utilities (bandwidth throttling)
+tokio-util = { version = "0.7", features = ["io"] }
+
+# Temp files in tests
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
