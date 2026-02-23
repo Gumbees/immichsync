@@ -166,44 +166,58 @@ ImmichSync requires an API key with the following permissions. On Immich server
 versions prior to v1.138.0 the key must use `all` permissions. On newer servers
 create a key with at least these scopes:
 
-| Permission | Used By |
-|---|---|
-| `asset.upload` | Upload photos/videos (`POST /api/assets`) |
-| `asset.read` | Bulk duplicate check (`POST /api/assets/bulk-upload-check`) |
-| `album.create` | Auto-create albums (`POST /api/albums`) |
-| `album.read` | List albums to find existing ones (`GET /api/albums`) |
-| `albumAsset.create` | Add assets to albums (`PUT /api/albums/{id}/assets`) |
-| `server.read` | Ping / server info (`GET /api/server/ping`, `/api/server/info`) |
-| `auth.read` | Validate API key (`GET /api/users/me`) |
+| Permission | Used By | Endpoint |
+|---|---|---|
+| `asset.upload` | Upload photos/videos + bulk dedup check | `POST /api/assets`, `POST /api/assets/bulk-upload-check` |
+| `album.create` | Auto-create albums | `POST /api/albums` |
+| `album.read` | List albums to find existing ones | `GET /api/albums` |
+| `albumAsset.create` | Add assets to albums | `PUT /api/albums/{id}/assets` |
+| `user.read` | Validate API key / get current user | `GET /api/users/me` |
+| `server.about` | Server version and details | `GET /api/server/about` |
+
+Note: `GET /api/server/ping` requires no auth (public endpoint) and is used for
+connectivity checks. The old `/api/server/info` endpoint no longer exists; use
+`/api/server/about` (requires `server.about`) or `/api/server/version` (public).
 
 When configuring an API key in the Immich web UI (User Settings > API Keys),
 grant these specific permissions or use `all` for simplicity.
+
+**Security note:** Immich versions < 2.4.1 and certain 2.5.x releases had a
+privilege escalation bug (GHSA-237r-x578-h5mv) where API keys could grant
+themselves additional permissions. Users should ensure they're on a patched
+version.
 
 ---
 
 ## Future: OAuth / OIDC Authentication
 
-Immich supports authentication via OpenID Connect (OIDC), configured by the
-server administrator. Currently ImmichSync only supports API key authentication.
+Immich supports three auth methods: API key (`x-api-key` header), bearer token
+(`Authorization: Bearer <JWT>`), and session cookie. Currently ImmichSync only
+supports API key authentication.
 
-A future release should add OAuth support:
+**Important:** Immich's OIDC support is for user login only — it is NOT an OAuth
+provider for third-party apps. There is no client credentials flow or way for
+external apps to obtain OAuth tokens. Users log in via providers like Authentik,
+Authelia, or Keycloak using the Authorization Code flow, but Immich does not
+expose API scopes through OAuth.
 
-- **Login flow:** Open system browser to the Immich server's OAuth authorization
-  URL. Listen on a localhost callback (e.g. `http://localhost:PORT/callback`) for
-  the redirect. Exchange the authorization code for an access + refresh token.
-- **Token storage:** Encrypt tokens via DPAPI (same as API keys).
-- **Token refresh:** Automatically refresh expired tokens using the refresh token.
-- **Scopes:** Immich's OIDC defaults to `openid email profile`.
-- **Mobile redirect:** Immich uses `app.immich:///oauth-callback` for mobile;
-  desktop apps should use the localhost redirect approach.
-- **Fallback:** Keep API key auth as primary — OAuth requires server admin to
-  configure an OIDC provider, which many self-hosters won't have.
-- **UI:** Add "Login with OAuth" button to Connection tab alongside the API key
-  field. If OAuth session is active, show "Logged in as {email}" with a logout
+A future release could add browser-based login to obtain a session token:
+
+- **Login flow:** Open system browser to the Immich login page. User
+  authenticates (with password or OIDC redirect). Capture the session JWT from
+  the response (requires a localhost callback server or deep-link handler).
+- **Token storage:** Encrypt JWT via DPAPI (same envelope encryption as API
+  keys).
+- **Token refresh:** Immich JWTs have expiration; would need periodic re-auth.
+- **Fallback:** Keep API key auth as the primary and recommended method — it's
+  simpler, more reliable, and doesn't require OIDC server configuration.
+- **UI:** Add "Login with Browser" button to Connection tab alongside the API
+  key field. If session is active, show "Logged in as {email}" with a logout
   button.
 
 Reference: [Immich OAuth docs](https://docs.immich.app/administration/oauth/),
-[Immich API docs](https://api.immich.app/getting-started)
+[Immich API docs](https://api.immich.app/getting-started),
+[Immich OpenAPI spec](https://github.com/immich-app/immich/blob/main/open-api/immich-openapi-specs.json)
 
 ---
 

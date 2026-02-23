@@ -108,7 +108,7 @@ cargo test
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/api/server/ping` | GET | Health check |
-| `/api/server/info` | GET | Server info |
+| `/api/server/about` | GET | Server info (requires `server.about`) |
 | `/api/assets` | POST | Upload asset (multipart) |
 | `/api/assets/bulk-upload-check` | POST | Check duplicates before upload |
 | `/api/albums` | POST | Create album |

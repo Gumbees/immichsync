@@ -7,7 +7,7 @@ use super::{ApiError, ImmichClient};
 // Response types
 // ---------------------------------------------------------------------------
 
-/// Subset of the `/api/server/info` response that we care about.
+/// Subset of the `/api/server/about` response that we care about.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerInfo {
@@ -15,19 +15,8 @@ pub struct ServerInfo {
     pub version: String,
 
     /// Whether the server has completed its initial setup.
-    pub is_initialized: bool,
-
-    /// Whether the server's onboarding steps are complete.
     #[serde(default)]
-    pub is_onboarded: bool,
-
-    /// URL prefix used for external links (may be empty).
-    #[serde(default)]
-    pub external_domain: String,
-
-    /// Whether the server requires login.
-    #[serde(default)]
-    pub login_page_message: String,
+    pub licensed: bool,
 }
 
 // The ping endpoint returns `{ "res": "pong" }`.
@@ -46,6 +35,8 @@ impl ImmichClient {
     /// Returns `true` when the server responds with the expected `"pong"` value.
     /// Returns `false` if the response body is unexpected (server is alive but
     /// not an Immich instance). All network and HTTP errors propagate normally.
+    ///
+    /// Note: `/api/server/ping` is a public endpoint — no auth required.
     #[instrument(skip(self), fields(url = %self.url("/api/server/ping")))]
     pub async fn ping(&self) -> Result<bool, ApiError> {
         debug!("pinging Immich server");
@@ -64,14 +55,16 @@ impl ImmichClient {
         Ok(ping.res == "pong")
     }
 
-    /// Retrieve server metadata from `/api/server/info`.
-    #[instrument(skip(self), fields(url = %self.url("/api/server/info")))]
+    /// Retrieve server metadata from `/api/server/about`.
+    ///
+    /// Requires the `server.about` API key permission.
+    #[instrument(skip(self), fields(url = %self.url("/api/server/about")))]
     pub async fn server_info(&self) -> Result<ServerInfo, ApiError> {
         debug!("fetching server info");
 
         let response = self
             .client
-            .get(self.url("/api/server/info"))
+            .get(self.url("/api/server/about"))
             .send()
             .await?;
 
