@@ -6,12 +6,16 @@ use eframe::egui;
 
 use crate::db::DbStore;
 
-/// Open the upload log viewer (blocking).
+/// Open the upload log viewer (blocking the calling thread).
 ///
-/// Call on the main thread — eframe's event loop will continue to dispatch
-/// Win32 messages for the tray icon while the log viewer is open.
+/// Safe to call from any thread — uses `with_any_thread(true)` so eframe can
+/// create its event loop off the main thread.
 pub fn show_upload_log(db: Arc<DbStore>) {
     let options = eframe::NativeOptions {
+        event_loop_builder: Some(Box::new(|builder| {
+            use winit::platform::windows::EventLoopBuilderExtWindows;
+            builder.with_any_thread(true);
+        })),
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([620.0, 420.0])
             .with_title("ImmichSync — Upload Log"),

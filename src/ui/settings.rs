@@ -34,14 +34,20 @@ impl Default for Settings {
     }
 }
 
-/// Open the settings window (blocking).
+/// Open the settings window (blocking the calling thread).
 ///
-/// Call on the main thread — eframe's event loop will continue to dispatch
-/// Win32 messages for the tray icon while settings is open.
+/// Safe to call from any thread — uses `with_any_thread(true)` so eframe can
+/// create its event loop off the main thread.  The `App` spawns this on a
+/// dedicated thread so the tray stays responsive.
+///
 /// When the user clicks Save, the modified config is sent through `result_tx`
 /// so the `App` can apply changes at runtime.
 pub fn show_settings(config: Config, result_tx: Option<Sender<Config>>) {
     let options = eframe::NativeOptions {
+        event_loop_builder: Some(Box::new(|builder| {
+            use winit::platform::windows::EventLoopBuilderExtWindows;
+            builder.with_any_thread(true);
+        })),
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([520.0, 420.0])
             .with_title("ImmichSync Settings"),

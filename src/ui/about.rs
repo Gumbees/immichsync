@@ -4,12 +4,16 @@ use eframe::egui;
 
 const STRIPE_LINK: &str = "https://buy.stripe.com/8x214n0IjaoL0zwcsj4AU00";
 
-/// Open the About dialog (blocking).
+/// Open the About dialog (blocking the calling thread).
 ///
-/// Call on the main thread — eframe's event loop will continue to dispatch
-/// Win32 messages for the tray icon while the dialog is open.
+/// Safe to call from any thread — uses `with_any_thread(true)` so eframe can
+/// create its event loop off the main thread.
 pub fn show_about() {
     let options = eframe::NativeOptions {
+        event_loop_builder: Some(Box::new(|builder| {
+            use winit::platform::windows::EventLoopBuilderExtWindows;
+            builder.with_any_thread(true);
+        })),
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([340.0, 220.0])
             .with_title("About ImmichSync")
