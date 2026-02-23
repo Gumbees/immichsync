@@ -32,6 +32,8 @@ pub struct App {
     watch_engine: Option<WatchEngine>,
     tray: Option<TrayApp>,
     tray_rx: Option<std::sync::mpsc::Receiver<TrayAction>>,
+    /// Receiver for config updates from the settings window (spawned on another thread).
+    settings_rx: Option<std::sync::mpsc::Receiver<Config>>,
     runtime: Arc<tokio::runtime::Runtime>,
     last_stats_update: Instant,
     paused: bool,
@@ -58,6 +60,7 @@ impl App {
             watch_engine: None,
             tray: None,
             tray_rx: None,
+            settings_rx: None,
             runtime,
             last_stats_update: Instant::now(),
             paused: false,
@@ -166,6 +169,13 @@ impl App {
                 return;
             }
 
+            // Check for config updates from the settings window.
+            if let Some(ref rx) = self.settings_rx {
+                if let Ok(new_config) = rx.try_recv() {
+                    self.apply_new_config(new_config);
+                }
+            }
+
             // Periodically refresh tray with queue statistics.
             self.update_tray_stats();
 
@@ -240,9 +250,12 @@ impl App {
             let store: Arc<dyn QueueStore> = self.db.clone();
             let concurrency = self.config.upload.concurrency as usize;
 
+            info!("Spawning watch→pipeline bridge task (concurrency={})", concurrency);
             self.runtime.spawn(async move {
                 bridge_watch_to_pipeline(event_rx, store, concurrency).await;
             });
+        } else {
+            warn!("No upload pipeline — watch events will not be processed. Is the server configured?");
         }
 
         Ok(())
@@ -270,24 +283,28 @@ impl App {
                 }
             }
             TrayAction::OpenSettings => {
-                // Run on main thread — eframe's event loop pumps all Win32
-                // messages, keeping the tray icon responsive while open.
+                // Spawn settings on its own thread so the main loop stays responsive
+                // and other windows can be opened concurrently.
                 let config = self.config.clone();
                 let (tx, rx) = std::sync::mpsc::channel();
-                crate::ui::settings::show_settings(config, Some(tx));
-                // Settings window has closed. Apply config if user clicked Save.
-                if let Ok(new_config) = rx.try_recv() {
-                    self.apply_new_config(new_config);
-                }
+                self.settings_rx = Some(rx);
+                std::thread::spawn(move || {
+                    crate::ui::settings::show_settings(config, Some(tx));
+                });
             }
             TrayAction::UploadNow => {
                 info!("Upload Now requested");
             }
             TrayAction::About => {
-                crate::ui::about::show_about();
+                std::thread::spawn(|| {
+                    crate::ui::about::show_about();
+                });
             }
             TrayAction::ViewLog => {
-                crate::ui::upload_log::show_upload_log(self.db.clone());
+                let db = self.db.clone();
+                std::thread::spawn(move || {
+                    crate::ui::upload_log::show_upload_log(db);
+                });
             }
             TrayAction::Quit => {
                 // Handled in run() directly.
