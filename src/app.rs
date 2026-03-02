@@ -4,6 +4,7 @@
 // settings UI.  The main loop is a native Win32 message pump — simpler and
 // more reliable for a tray-only app than running a full winit event loop.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -41,6 +42,27 @@ pub struct App {
     was_syncing: bool,
     /// Notification manager.
     notifications: crate::ui::notifications::Notifications,
+    /// Tracks whether each UI window type is currently open.
+    window_open: WindowOpenTracker,
+}
+
+/// Tracks whether each type of UI window is currently open, preventing
+/// multiple instances of the same window from being spawned.
+#[derive(Clone)]
+pub struct WindowOpenTracker {
+    pub settings: Arc<AtomicBool>,
+    pub about: Arc<AtomicBool>,
+    pub upload_log: Arc<AtomicBool>,
+}
+
+impl WindowOpenTracker {
+    fn new() -> Self {
+        Self {
+            settings: Arc::new(AtomicBool::new(false)),
+            about: Arc::new(AtomicBool::new(false)),
+            upload_log: Arc::new(AtomicBool::new(false)),
+        }
+    }
 }
 
 impl App {
@@ -66,6 +88,7 @@ impl App {
             paused: false,
             was_syncing: false,
             notifications,
+            window_open: WindowOpenTracker::new(),
         }
     }
 
@@ -73,6 +96,14 @@ impl App {
     ///
     /// Must be called on the main thread before [`run`].
     pub fn init(&mut self) -> anyhow::Result<()> {
+        // Recover any entries stuck in "uploading" state from a previous crash.
+        {
+            let db = self.db.inner().lock().unwrap();
+            if let Err(e) = db.reset_stale_uploading() {
+                warn!(error = %e, "Failed to reset stale uploading entries");
+            }
+        }
+
         // Create system tray (must be on main thread).
         let (tray, tray_rx) = TrayApp::new()
             .map_err(|e| anyhow::anyhow!("Failed to create tray: {}", e))?;
@@ -188,10 +219,16 @@ impl App {
 
     /// Register watched folders and spawn the watch→pipeline bridge task.
     fn start_watch_engine(&mut self) -> anyhow::Result<()> {
+        use std::collections::HashMap;
+
         let mut engine = WatchEngine::new();
         let event_rx = engine
             .event_receiver()
             .ok_or_else(|| anyhow::anyhow!("event_receiver already taken"))?;
+
+        // Map from canonical watched path → folder DB id, so the bridge task
+        // can look up which folder a file event belongs to.
+        let mut path_to_folder_id: HashMap<std::path::PathBuf, i64> = HashMap::new();
 
         // Load watched folders from the database.
         {
@@ -207,16 +244,20 @@ impl App {
                     if pictures.exists() {
                         info!(path = %pictures.display(), "Adding default Pictures folder");
                         let db = self.db.inner().lock().unwrap();
-                        if let Ok(_id) = db.add_folder(
+                        if let Ok(id) = db.add_folder(
                             &pictures.display().to_string(),
                             Some("Pictures"),
                             true,
                         ) {
                             let filter = FileFilter::new();
+                            let canon = std::fs::canonicalize(&pictures)
+                                .unwrap_or_else(|_| pictures.clone());
                             if let Err(e) =
                                 engine.add_folder(pictures, filter, false, self.runtime.handle().clone())
                             {
                                 warn!("Failed to add Pictures watcher: {}", e);
+                            } else {
+                                path_to_folder_id.insert(canon, id);
                             }
                         }
                     }
@@ -234,9 +275,13 @@ impl App {
                     let is_network =
                         folder.watch_mode == crate::db::WatchMode::Poll;
                     let filter = FileFilter::new();
+                    let canon = std::fs::canonicalize(&path)
+                        .unwrap_or_else(|_| path.clone());
                     if let Err(e) = engine.add_folder(path, filter, is_network, self.runtime.handle().clone())
                     {
                         warn!(path = %folder.path, error = %e, "Failed to add watcher");
+                    } else {
+                        path_to_folder_id.insert(canon, folder.id);
                     }
                 }
             }
@@ -249,10 +294,11 @@ impl App {
         if self.pipeline.is_some() {
             let store: Arc<dyn QueueStore> = self.db.clone();
             let concurrency = self.config.upload.concurrency as usize;
+            let folder_map = Arc::new(path_to_folder_id);
 
             info!("Spawning watch→pipeline bridge task (concurrency={})", concurrency);
             self.runtime.spawn(async move {
-                bridge_watch_to_pipeline(event_rx, store, concurrency).await;
+                bridge_watch_to_pipeline(event_rx, store, concurrency, folder_map).await;
             });
         } else {
             warn!("No upload pipeline — watch events will not be processed. Is the server configured?");
@@ -283,27 +329,43 @@ impl App {
                 }
             }
             TrayAction::OpenSettings => {
-                // Spawn settings on its own thread so the main loop stays responsive
-                // and other windows can be opened concurrently.
+                if self.window_open.settings.swap(true, Ordering::SeqCst) {
+                    info!("Settings window already open, ignoring");
+                    return;
+                }
                 let config = self.config.clone();
                 let (tx, rx) = std::sync::mpsc::channel();
                 self.settings_rx = Some(rx);
+                let flag = self.window_open.settings.clone();
                 std::thread::spawn(move || {
                     crate::ui::settings::show_settings(config, Some(tx));
+                    flag.store(false, Ordering::SeqCst);
                 });
             }
             TrayAction::UploadNow => {
                 info!("Upload Now requested");
             }
             TrayAction::About => {
-                std::thread::spawn(|| {
+                if self.window_open.about.swap(true, Ordering::SeqCst) {
+                    info!("About window already open, ignoring");
+                    return;
+                }
+                let flag = self.window_open.about.clone();
+                std::thread::spawn(move || {
                     crate::ui::about::show_about();
+                    flag.store(false, Ordering::SeqCst);
                 });
             }
             TrayAction::ViewLog => {
+                if self.window_open.upload_log.swap(true, Ordering::SeqCst) {
+                    info!("Upload Log window already open, ignoring");
+                    return;
+                }
                 let db = self.db.clone();
+                let flag = self.window_open.upload_log.clone();
                 std::thread::spawn(move || {
                     crate::ui::upload_log::show_upload_log(db);
+                    flag.store(false, Ordering::SeqCst);
                 });
             }
             TrayAction::Quit => {
@@ -422,6 +484,7 @@ async fn bridge_watch_to_pipeline(
     mut event_rx: tokio::sync::mpsc::Receiver<WatchEvent>,
     store: Arc<dyn QueueStore>,
     concurrency: usize,
+    folder_map: Arc<std::collections::HashMap<std::path::PathBuf, i64>>,
 ) {
     let queue = UploadQueue::new(store, concurrency);
 
@@ -429,7 +492,8 @@ async fn bridge_watch_to_pipeline(
         match event {
             WatchEvent::FileReady(path) => {
                 info!(path = %path.display(), "Watch: file ready");
-                match queue.process_file(path, None) {
+                let folder_id = resolve_folder_id(&path, &folder_map);
+                match queue.process_file(path, folder_id) {
                     Ok(Some(id)) => info!(id, "File enqueued"),
                     Ok(None) => info!("File already uploaded, skipping"),
                     Err(e) => warn!(error = %e, "Failed to process file"),
@@ -444,4 +508,21 @@ async fn bridge_watch_to_pipeline(
         }
     }
     info!("Watch→pipeline bridge stopped");
+}
+
+/// Find the watched folder that contains `file_path` by walking up the
+/// directory tree and checking against the canonical folder map.
+fn resolve_folder_id(
+    file_path: &std::path::Path,
+    folder_map: &std::collections::HashMap<std::path::PathBuf, i64>,
+) -> Option<i64> {
+    let canonical = std::fs::canonicalize(file_path).unwrap_or_else(|_| file_path.to_path_buf());
+    let mut dir = canonical.parent();
+    while let Some(d) = dir {
+        if let Some(&id) = folder_map.get(d) {
+            return Some(id);
+        }
+        dir = d.parent();
+    }
+    None
 }

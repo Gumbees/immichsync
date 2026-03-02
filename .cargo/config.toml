@@ -1,0 +1,4 @@
+# Build target directory on local disk to avoid UNC path issues when the
+# repo lives on a mapped network drive.
+[build]
+target-dir = "C:\\Users\\natesmith\\.cargo-target\\immichsync"

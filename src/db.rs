@@ -601,8 +601,11 @@ impl Database {
             _ => None,
         };
 
-        // Increment retry_count only on failure.
-        let retry_increment: i32 = if *status == QueueStatus::Failed { 1 } else { 0 };
+        // Increment retry_count on failure and on retry (pending with error).
+        let retry_increment: i32 = match status {
+            QueueStatus::Failed | QueueStatus::Pending => 1,
+            _ => 0,
+        };
 
         self.conn.execute(
             "UPDATE upload_queue
@@ -688,6 +691,24 @@ impl Database {
 
         let rows = stmt.query_map(params![limit], map_queue_entry)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(DbError::Query)
+    }
+
+    /// Reset any entries stuck in `uploading` state back to `pending`.
+    ///
+    /// This recovers from crashes where the app exited mid-upload, leaving
+    /// entries in a state that `dequeue_pending` will never pick up.
+    pub fn reset_stale_uploading(&self) -> Result<usize, DbError> {
+        let count = self.conn.execute(
+            "UPDATE upload_queue
+             SET status = 'pending',
+                 error_message = NULL
+             WHERE status = 'uploading'",
+            [],
+        )?;
+        if count > 0 {
+            info!(count, "Reset stale uploading entries to pending");
+        }
+        Ok(count)
     }
 
     /// Delete all completed queue entries.  Useful for housekeeping.
@@ -1061,6 +1082,44 @@ mod tests {
         assert_eq!(purged, 1);
         let stats = db.get_queue_stats().unwrap();
         assert_eq!(stats.completed, 0);
+    }
+
+    #[test]
+    fn reset_stale_uploading() {
+        let db = open_test_db();
+        let id1 = db.enqueue("/photos/g.jpg", None, None, None).unwrap();
+        let id2 = db.enqueue("/photos/h.jpg", None, None, None).unwrap();
+
+        // Simulate a crash: mark both as uploading.
+        db.update_queue_status(id1, &QueueStatus::Uploading, None).unwrap();
+        db.update_queue_status(id2, &QueueStatus::Uploading, None).unwrap();
+
+        let stats = db.get_queue_stats().unwrap();
+        assert_eq!(stats.uploading, 2);
+        assert_eq!(stats.pending, 0);
+
+        // Reset stale entries.
+        let count = db.reset_stale_uploading().unwrap();
+        assert_eq!(count, 2);
+
+        let stats = db.get_queue_stats().unwrap();
+        assert_eq!(stats.uploading, 0);
+        assert_eq!(stats.pending, 2);
+    }
+
+    #[test]
+    fn retry_count_increments_on_pending_retry() {
+        let db = open_test_db();
+        let id = db.enqueue("/photos/retry.jpg", None, None, None).unwrap();
+
+        // Simulate: dequeued and failed, then set back to pending for retry.
+        db.update_queue_status(id, &QueueStatus::Uploading, None).unwrap();
+        db.update_queue_status(id, &QueueStatus::Pending, Some("timeout")).unwrap();
+
+        // Check that retry_count was incremented.
+        let entries = db.get_recent_queue_entries(10).unwrap();
+        let entry = entries.iter().find(|e| e.id == id).unwrap();
+        assert_eq!(entry.retry_count, 1);
     }
 
     #[test]
