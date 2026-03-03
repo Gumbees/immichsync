@@ -297,8 +297,18 @@ impl App {
             let folder_map = Arc::new(path_to_folder_id);
 
             info!("Spawning watch→pipeline bridge task (concurrency={})", concurrency);
+            let bridge_store = store.clone();
+            let bridge_map = folder_map.clone();
             self.runtime.spawn(async move {
-                bridge_watch_to_pipeline(event_rx, store, concurrency, folder_map).await;
+                bridge_watch_to_pipeline(event_rx, bridge_store, concurrency, bridge_map).await;
+            });
+
+            // Run a one-time initial scan of all watched folders to pick up
+            // existing files that were added before the watcher started.
+            let scan_store = store;
+            let scan_map = folder_map;
+            self.runtime.spawn(async move {
+                initial_scan(scan_store, scan_map).await;
             });
         } else {
             warn!("No upload pipeline — watch events will not be processed. Is the server configured?");
@@ -501,6 +511,107 @@ async fn bridge_watch_to_pipeline(
         }
     }
     info!("Watch→pipeline bridge stopped");
+}
+
+/// One-time initial scan of all watched folders.
+///
+/// Walks each directory tree recursively, filters files using [`FileFilter`],
+/// and enqueues any that haven't already been uploaded.  Runs as a background
+/// task so it doesn't block the main loop or the real-time watcher.
+async fn initial_scan(
+    store: Arc<dyn QueueStore>,
+    folder_map: Arc<std::collections::HashMap<std::path::PathBuf, i64>>,
+) {
+    use std::path::PathBuf;
+
+    info!("Initial scan: starting");
+
+    let store2 = store.clone();
+    let folder_map2 = folder_map.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let filter = FileFilter::new();
+        let queue = UploadQueue::new(store2, 2);
+        let mut scanned: u64 = 0;
+        let mut enqueued: u64 = 0;
+        let mut skipped: u64 = 0;
+        let mut errors: u64 = 0;
+
+        for (folder_path, &folder_id) in folder_map2.as_ref() {
+            info!(path = %folder_path.display(), "Initial scan: scanning folder");
+            let mut dirs = vec![folder_path.clone()];
+
+            while let Some(dir) = dirs.pop() {
+                let entries = match std::fs::read_dir(&dir) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        warn!(path = %dir.display(), error = %e, "Initial scan: cannot read directory");
+                        continue;
+                    }
+                };
+
+                for entry in entries {
+                    let entry = match entry {
+                        Ok(e) => e,
+                        Err(e) => {
+                            warn!(error = %e, "Initial scan: directory entry error");
+                            continue;
+                        }
+                    };
+
+                    let path = entry.path();
+
+                    // Recurse into subdirectories.
+                    if path.is_dir() {
+                        dirs.push(path);
+                        continue;
+                    }
+
+                    if !path.is_file() {
+                        continue;
+                    }
+
+                    if !filter.should_include(&path) {
+                        continue;
+                    }
+
+                    scanned += 1;
+
+                    match queue.process_file(path, Some(folder_id)) {
+                        Ok(Some(_id)) => enqueued += 1,
+                        Ok(None) => skipped += 1,
+                        Err(e) => {
+                            errors += 1;
+                            warn!(error = %e, "Initial scan: failed to process file");
+                        }
+                    }
+
+                    // Log progress every 100 files.
+                    if scanned % 100 == 0 {
+                        info!(scanned, enqueued, skipped, "Initial scan: progress");
+                    }
+                }
+            }
+        }
+
+        (scanned, enqueued, skipped, errors)
+    })
+    .await;
+
+    match result {
+        Ok((scanned, enqueued, skipped, errors)) => {
+            info!(
+                scanned,
+                enqueued,
+                skipped,
+                errors,
+                "Initial scan: complete"
+            );
+        }
+        Err(e) => {
+            warn!(error = %e, "Initial scan task panicked");
+        }
+    }
 }
 
 /// Spawn a UI window as a child process.
