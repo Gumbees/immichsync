@@ -591,20 +591,30 @@ impl Database {
     ///
     /// Uses a prefix match on `file_path` (with trailing backslash) so only
     /// files inside the folder are returned, not siblings with similar names.
+    ///
+    /// Handles both normal paths (`C:\Photos\...`) and Windows extended-length
+    /// paths (`\\?\C:\Photos\...`) which the file watcher may produce.
     pub fn get_uploaded_paths_in_folder(&self, folder_path: &str) -> Result<Vec<String>, DbError> {
+        // Strip \\?\ prefix if present so we have the canonical form.
+        let canonical = folder_path.strip_prefix(r"\\?\").unwrap_or(folder_path);
+
         // Ensure the prefix ends with a separator for exact directory matching.
-        let prefix = if folder_path.ends_with('\\') || folder_path.ends_with('/') {
-            folder_path.to_string()
+        let prefix = if canonical.ends_with('\\') || canonical.ends_with('/') {
+            canonical.to_string()
         } else {
-            format!("{folder_path}\\")
+            format!("{canonical}\\")
         };
 
+        // Also match the \\?\ extended-path variant stored by the file watcher.
+        let ext_prefix = format!(r"\\?\{prefix}");
+
         let mut stmt = self.conn.prepare(
-            "SELECT file_path FROM uploaded_files WHERE file_path LIKE ?1",
+            "SELECT file_path FROM uploaded_files WHERE file_path LIKE ?1 OR file_path LIKE ?2",
         )?;
-        let rows = stmt.query_map(params![format!("{prefix}%")], |row| {
-            row.get::<_, String>(0)
-        })?;
+        let rows = stmt.query_map(
+            params![format!("{prefix}%"), format!("{ext_prefix}%")],
+            |row| row.get::<_, String>(0),
+        )?;
 
         let mut paths = Vec::new();
         for row in rows {

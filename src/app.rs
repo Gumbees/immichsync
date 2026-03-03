@@ -246,9 +246,12 @@ impl App {
             // Poll for background download completion.
             self.poll_update_download();
 
-            // Periodic re-check for updates (every 24h).
+            // Periodic re-check for updates.
+            let check_interval = updater::check_interval_from_hours(
+                self.config.advanced.update_check_interval_hours,
+            );
             if self.config.advanced.check_for_updates
-                && self.last_update_check.elapsed() >= updater::CHECK_INTERVAL
+                && self.last_update_check.elapsed() >= check_interval
             {
                 self.schedule_update_check(false);
             }
@@ -541,11 +544,12 @@ impl App {
         self.update_rx = Some(rx);
         self.last_update_check = Instant::now();
 
+        let repo = self.config.advanced.update_repo.clone();
         self.runtime.spawn(async move {
             if with_delay {
                 tokio::time::sleep(updater::STARTUP_DELAY).await;
             }
-            let result = updater::check_for_update().await;
+            let result = updater::check_for_update(&repo).await;
             let _ = tx.send(result);
         });
     }

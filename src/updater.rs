@@ -13,15 +13,25 @@ use tracing::{debug, info, warn};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const GITHUB_API_URL: &str =
-    "https://api.github.com/repos/gumbees/immichsync/releases/latest";
+const DEFAULT_REPO: &str = "gumbees/immichsync";
 const ASSET_NAME: &str = "immichsync.exe";
 
 /// Delay before the first automatic update check after startup.
 pub const STARTUP_DELAY: Duration = Duration::from_secs(30);
 
-/// Interval between periodic update checks.
-pub const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// Build the GitHub API URL for the latest release of the given repo.
+fn github_api_url(repo: &str) -> String {
+    format!("https://api.github.com/repos/{repo}/releases/latest")
+}
+
+/// Build the check interval from config hours (0 = disabled).
+pub fn check_interval_from_hours(hours: u32) -> Duration {
+    if hours == 0 {
+        Duration::from_secs(u64::MAX) // effectively disabled
+    } else {
+        Duration::from_secs(hours as u64 * 3600)
+    }
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -81,21 +91,26 @@ pub enum UpdateError {
 // ─── Check ───────────────────────────────────────────────────────────────────
 
 /// Check GitHub for a newer release.
-pub async fn check_for_update() -> UpdateCheckResult {
-    match check_inner().await {
+///
+/// `repo` is the GitHub `owner/repo` string (e.g. `"gumbees/immichsync"`).
+/// Pass an empty string to use the default.
+pub async fn check_for_update(repo: &str) -> UpdateCheckResult {
+    let repo = if repo.is_empty() { DEFAULT_REPO } else { repo };
+    match check_inner(repo).await {
         Ok(result) => result,
         Err(e) => UpdateCheckResult::Failed(e.to_string()),
     }
 }
 
-async fn check_inner() -> Result<UpdateCheckResult, UpdateError> {
+async fn check_inner(repo: &str) -> Result<UpdateCheckResult, UpdateError> {
+    let url = github_api_url(repo);
     let client = reqwest::Client::builder()
         .user_agent(format!("ImmichSync/{}", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(15))
         .build()?;
 
     let release: GitHubRelease = client
-        .get(GITHUB_API_URL)
+        .get(&url)
         .send()
         .await?
         .error_for_status()?

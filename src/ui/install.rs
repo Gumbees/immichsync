@@ -5,10 +5,15 @@
 //
 // In update mode, the heading, button label, and description change to
 // reflect that an existing installation is being updated.
+//
+// Exit codes (subprocess mode):
+//   0 = Install/Update chosen — caller should relaunch from installed path
+//   1 = Run Portable — caller should continue from current location
 
 use std::sync::{Arc, Mutex};
 
 use eframe::egui;
+use tracing::{info, warn};
 
 use crate::config::Config;
 
@@ -21,18 +26,10 @@ pub enum InstallResult {
     Portable,
 }
 
-/// Run the install dialog. Blocks the calling thread.
+/// Run the install dialog in subprocess mode (calls `process::exit`).
 ///
-/// When `is_update` is true, the dialog shows "Update ImmichSync" instead
-/// of "Install ImmichSync" and displays the version transition.
-///
-/// Returns `InstallResult::Installed` if the user clicked Install/Update,
-/// or `InstallResult::Portable` if Run Portable was chosen or the window
-/// was closed.
-///
-/// When called from a subprocess (`--window install`), use
-/// `run_install_dialog_subprocess` instead, which calls `process::exit`.
-pub fn run_install_dialog(is_update: bool, old_version: Option<String>) -> InstallResult {
+/// Used when invoked via `--window install` or `--window install-update`.
+pub fn run_install_dialog_subprocess(is_update: bool, old_version: Option<String>) {
     let install_dir = Config::data_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "(unknown)".to_string());
@@ -66,23 +63,20 @@ pub fn run_install_dialog(is_update: bool, old_version: Option<String>) -> Insta
         result: result.clone(),
     };
 
-    let _ = eframe::run_native(
+    info!("Opening install dialog (is_update={is_update})");
+    match eframe::run_native(
         title,
         options,
         Box::new(|_cc| Ok(Box::new(app))),
-    );
+    ) {
+        Ok(()) => {}
+        Err(e) => {
+            tracing::error!(error = %e, "eframe::run_native failed for install dialog");
+        }
+    }
 
-    // Return the result set by the dialog.
     let r = *result.lock().unwrap();
-    r
-}
-
-/// Run the install dialog in subprocess mode (calls `process::exit`).
-///
-/// Used when invoked via `--window install` or `--window install-update`.
-pub fn run_install_dialog_subprocess(is_update: bool, old_version: Option<String>) {
-    let result = run_install_dialog(is_update, old_version);
-    match result {
+    match r {
         InstallResult::Installed => std::process::exit(0),
         InstallResult::Portable => std::process::exit(1),
     }
@@ -129,7 +123,9 @@ impl eframe::App for InstallApp {
 
             ui.add_space(16.0);
 
-            ui.checkbox(&mut self.autostart, "Start with Windows");
+            if !self.is_update {
+                ui.checkbox(&mut self.autostart, "Start with Windows");
+            }
             ui.checkbox(&mut self.desktop_shortcut, "Create desktop shortcut");
             ui.checkbox(&mut self.start_menu_shortcut, "Add to Start Menu");
 
@@ -143,7 +139,6 @@ impl eframe::App for InstallApp {
             let action_label = if self.is_update { "Update" } else { "Install" };
 
             ui.horizontal(|ui| {
-                // Right-align buttons by adding flexible space first.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Run Portable").clicked() {
                         self.do_portable(ctx);
@@ -160,10 +155,22 @@ impl eframe::App for InstallApp {
 
 impl InstallApp {
     fn do_install(&mut self, ctx: &egui::Context) {
-        // Copy exe to install directory.
+        // For updates, kill any running instances first so we can overwrite the exe.
+        if self.is_update {
+            info!("Killing running ImmichSync instances before update");
+            kill_running_instances();
+            // Brief wait for process to fully exit and release file handles.
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+
+        // Try to copy the exe. If it fails (file still locked), try the rename dance.
         if let Err(e) = crate::platform::install_exe() {
-            self.status = format!("Install failed: {e}");
-            return;
+            warn!(error = %e, "install_exe failed, trying rename dance");
+
+            if let Err(e2) = install_exe_rename_dance() {
+                self.status = format!("Install failed: {e2}");
+                return;
+            }
         }
 
         let installed_path = match crate::platform::installed_exe_path() {
@@ -181,7 +188,7 @@ impl InstallApp {
                 "ImmichSync",
                 "Sync photos and videos to Immich",
             ) {
-                tracing::warn!(error = %e, "Failed to create desktop shortcut");
+                warn!(error = %e, "Failed to create desktop shortcut");
             }
         }
 
@@ -191,21 +198,25 @@ impl InstallApp {
                 "ImmichSync",
                 "Sync photos and videos to Immich",
             ) {
-                tracing::warn!(error = %e, "Failed to create Start Menu shortcut");
+                warn!(error = %e, "Failed to create Start Menu shortcut");
             }
         }
 
-        // Set autostart.
-        if let Err(e) = crate::platform::set_autostart(self.autostart) {
-            tracing::warn!(error = %e, "Failed to set autostart");
+        // Set autostart (preserve existing setting for updates).
+        if !self.is_update {
+            if let Err(e) = crate::platform::set_autostart(self.autostart) {
+                warn!(error = %e, "Failed to set autostart");
+            }
         }
 
         // Save config with portable_mode = false.
         if let Ok(mut config) = Config::load() {
-            config.ui.start_with_windows = self.autostart;
+            if !self.is_update {
+                config.ui.start_with_windows = self.autostart;
+            }
             config.ui.portable_mode = false;
             if let Err(e) = config.save() {
-                tracing::warn!(error = %e, "Failed to save config from install dialog");
+                warn!(error = %e, "Failed to save config from install dialog");
             }
         }
 
@@ -214,15 +225,82 @@ impl InstallApp {
     }
 
     fn do_portable(&mut self, ctx: &egui::Context) {
-        // Save config with portable_mode = true so we don't ask again.
         if let Ok(mut config) = Config::load() {
             config.ui.portable_mode = true;
             if let Err(e) = config.save() {
-                tracing::warn!(error = %e, "Failed to save config from install dialog");
+                warn!(error = %e, "Failed to save config from install dialog");
             }
         }
 
         *self.result.lock().unwrap() = InstallResult::Portable;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
+}
+
+/// Kill any running ImmichSync processes (except ourselves).
+fn kill_running_instances() {
+    let our_pid = std::process::id();
+
+    // Use taskkill to terminate all immichsync.exe processes except ours.
+    // /F = force, /FI = filter, /IM = image name.
+    let output = std::process::Command::new("taskkill")
+        .args(["/F", "/IM", "immichsync.exe"])
+        .output();
+
+    match output {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            info!(
+                our_pid,
+                stdout = %stdout.trim(),
+                stderr = %stderr.trim(),
+                "taskkill result"
+            );
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to run taskkill");
+        }
+    }
+}
+
+/// Fallback install: rename the locked installed exe to .old, then copy the new one in.
+///
+/// This works because Windows allows renaming a running exe (just not overwriting).
+fn install_exe_rename_dance() -> Result<(), String> {
+    let current = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    let dest = crate::platform::installed_exe_path().map_err(|e| format!("installed_exe_path: {e}"))?;
+    let old = dest.with_extension("exe.old");
+
+    // Remove leftover .old if it exists.
+    if old.exists() {
+        let _ = std::fs::remove_file(&old);
+    }
+
+    // Rename running exe → .old (works on Windows even while running).
+    if dest.exists() {
+        info!(
+            from = %dest.display(),
+            to = %old.display(),
+            "Renaming installed exe to .old"
+        );
+        std::fs::rename(&dest, &old).map_err(|e| format!("rename to .old: {e}"))?;
+    }
+
+    // Copy new exe into place.
+    info!(
+        from = %current.display(),
+        to = %dest.display(),
+        "Copying new exe to install dir"
+    );
+    std::fs::copy(&current, &dest).map_err(|e| format!("copy: {e}"))?;
+
+    // Write version.txt.
+    if let Some(parent) = dest.parent() {
+        let version_file = parent.join("version.txt");
+        let _ = std::fs::write(&version_file, crate::platform::install::running_version());
+    }
+
+    info!("Install via rename dance succeeded");
+    Ok(())
 }

@@ -59,13 +59,11 @@ fn main() -> anyhow::Result<()> {
 
     // ── Install dialog + relaunch ────────────────────────────────────────
     // If not running from the installed location, show an install/update
-    // dialog DIRECTLY in this process (not as a subprocess). Running it
-    // inline guarantees the window gets foreground focus — subprocess
-    // windows on Windows often open behind other windows without focus.
+    // dialog as a subprocess. The subprocess handles killing any running
+    // instances and copying the exe (with rename-dance fallback).
     //
-    // This is safe because the main process hasn't created a winit
-    // EventLoop yet, and after this point it only uses a Win32 message
-    // pump for the tray app.
+    // We call AllowSetForegroundWindow before spawning so the subprocess
+    // can bring its window to the foreground on Windows.
     match platform::is_running_installed() {
         Ok(false) => {
             // Check if user previously chose portable mode.
@@ -90,22 +88,18 @@ fn main() -> anyhow::Result<()> {
                     };
 
                     if let Some((old_ver, new_ver)) = update_info {
-                        // Running version is newer — show update dialog inline.
                         info!(
                             from = %old_ver, to = %new_ver,
-                            "Newer version running, showing install-update dialog"
+                            "Newer version running, spawning install-update dialog"
                         );
-
-                        let result = ui::install::run_install_dialog(true, Some(old_ver));
-
-                        match result {
-                            ui::install::InstallResult::Installed => {
+                        match spawn_install_dialog(&["--window", "install-update", "--old-version", &old_ver]) {
+                            Some(0) => {
                                 info!("Update complete, relaunching from installed path");
                                 if let Err(e) = platform::relaunch_installed() {
                                     tracing::warn!(error = %e, "Relaunch failed, continuing from current location");
                                 }
                             }
-                            ui::install::InstallResult::Portable => {
+                            _ => {
                                 info!("User declined update, continuing from current location");
                             }
                         }
@@ -117,19 +111,16 @@ fn main() -> anyhow::Result<()> {
                         }
                     }
                 } else {
-                    // No installed copy — show fresh install dialog inline.
-                    info!("Not running from installed path, showing install dialog");
-
-                    let result = ui::install::run_install_dialog(false, None);
-
-                    match result {
-                        ui::install::InstallResult::Installed => {
+                    // No installed copy — show fresh install dialog.
+                    info!("Not running from installed path, spawning install dialog");
+                    match spawn_install_dialog(&["--window", "install"]) {
+                        Some(0) => {
                             info!("Install complete, relaunching from installed path");
                             if let Err(e) = platform::relaunch_installed() {
                                 tracing::warn!(error = %e, "Relaunch failed, continuing from current location");
                             }
                         }
-                        ui::install::InstallResult::Portable => {
+                        _ => {
                             info!("User chose portable mode, continuing from current location");
                         }
                     }
@@ -267,7 +258,10 @@ fn check_for_update_on_startup() {
         }
     };
 
-    let result = rt.block_on(updater::check_for_update());
+    let repo = config::Config::load()
+        .map(|c| c.advanced.update_repo)
+        .unwrap_or_default();
+    let result = rt.block_on(updater::check_for_update(&repo));
 
     match result {
         updater::UpdateCheckResult::Available(info) => {
@@ -290,6 +284,16 @@ fn check_for_update_on_startup() {
             if let Err(e) = std::fs::write(&info_path, &info_json) {
                 tracing::warn!(error = %e, "Failed to write update info file");
                 return;
+            }
+
+            // Grant the subprocess permission to steal foreground focus.
+            #[cfg(target_os = "windows")]
+            {
+                use windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
+                const ASFW_ANY: u32 = u32::MAX;
+                unsafe {
+                    let _ = AllowSetForegroundWindow(ASFW_ANY);
+                }
             }
 
             // Spawn the update dialog subprocess.
@@ -319,6 +323,41 @@ fn check_for_update_on_startup() {
         }
         updater::UpdateCheckResult::Failed(msg) => {
             tracing::warn!(error = %msg, "Startup update check failed, continuing");
+        }
+    }
+}
+
+/// Spawn a subprocess dialog with foreground window rights.
+///
+/// Calls `AllowSetForegroundWindow(ASFW_ANY)` so the child process can
+/// bring its eframe window to the foreground, then spawns `current_exe()`
+/// with the given args and waits for it to exit.
+///
+/// Returns `Some(exit_code)` on success, `None` if the spawn failed.
+fn spawn_install_dialog(args: &[&str]) -> Option<i32> {
+    // Grant the subprocess permission to steal foreground focus.
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
+        // ASFW_ANY = (DWORD)-1 — allows any process to set foreground.
+        const ASFW_ANY: u32 = u32::MAX;
+        unsafe {
+            let _ = AllowSetForegroundWindow(ASFW_ANY);
+        }
+    }
+
+    let exe = std::env::current_exe().expect("current_exe");
+    info!(exe = %exe.display(), args = ?args, "Spawning install dialog subprocess");
+
+    match std::process::Command::new(&exe).args(args).status() {
+        Ok(status) => {
+            let code = status.code();
+            info!(code = ?code, "Install dialog subprocess exited");
+            code
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to spawn install dialog subprocess");
+            None
         }
     }
 }

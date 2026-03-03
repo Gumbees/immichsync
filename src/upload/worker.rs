@@ -367,10 +367,12 @@ async fn process_item(
             );
 
             // Record in uploaded_files.
+            // Strip the \\?\ extended-path prefix so DB queries match cleanly.
+            let clean_path = entry.file_path.strip_prefix(r"\\?\").unwrap_or(&entry.file_path);
             if let Some(hash) = &entry.file_hash {
                 let size = entry.file_size.unwrap_or(0);
                 if let Err(e) = store.record_upload(
-                    &entry.file_path,
+                    clean_path,
                     hash,
                     size,
                     &upload_result.asset_id,

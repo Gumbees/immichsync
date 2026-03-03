@@ -198,6 +198,12 @@ pub struct AdvancedConfig {
 
     /// Automatically check GitHub for new releases.
     pub check_for_updates: bool,
+
+    /// Hours between automatic update checks. `0` disables periodic checks.
+    pub update_check_interval_hours: u32,
+
+    /// GitHub repository to check for updates (format: `owner/repo`).
+    pub update_repo: String,
 }
 
 impl Default for AdvancedConfig {
@@ -207,6 +213,8 @@ impl Default for AdvancedConfig {
             poll_interval_secs: 30,
             write_settle_ms: 2000,
             check_for_updates: true,
+            update_check_interval_hours: 24,
+            update_repo: "gumbees/immichsync".to_string(),
         }
     }
 }

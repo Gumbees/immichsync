@@ -80,6 +80,8 @@ pub fn show_settings(config: Config, result_tx: Option<Sender<Config>>) {
         notify_on_complete: config.ui.notification_on_complete,
         write_settle_ms: config.advanced.write_settle_ms,
         check_for_updates: config.advanced.check_for_updates,
+        update_check_interval_hours: config.advanced.update_check_interval_hours,
+        update_repo: config.advanced.update_repo.clone(),
 
         // Watch Folders tab
         folders,
@@ -135,6 +137,8 @@ struct SettingsApp {
     notify_on_complete: bool,
     write_settle_ms: u64,
     check_for_updates: bool,
+    update_check_interval_hours: u32,
+    update_repo: String,
 
     // Watch Folders tab
     folders: Vec<WatchedFolder>,
@@ -463,6 +467,21 @@ impl SettingsApp {
         ui.checkbox(&mut self.minimize_to_tray, "Minimize to system tray");
         ui.checkbox(&mut self.show_notifications, "Show notifications");
         ui.checkbox(&mut self.check_for_updates, "Automatically check for updates");
+        ui.add_enabled_ui(self.check_for_updates, |ui| {
+            ui.indent("update_indent", |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Check every");
+                    let mut hours_i32 = self.update_check_interval_hours as i32;
+                    ui.add(egui::DragValue::new(&mut hours_i32).range(1..=168));
+                    self.update_check_interval_hours = hours_i32.max(1) as u32;
+                    ui.label("hours");
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Repository:");
+                    ui.text_edit_singleline(&mut self.update_repo);
+                });
+            });
+        });
         ui.add_enabled_ui(self.show_notifications, |ui| {
             ui.indent("notify_indent", |ui| {
                 ui.checkbox(&mut self.notify_on_complete, "Notify when uploads complete");
@@ -524,6 +543,8 @@ impl SettingsApp {
         self.config.advanced.log_level = self.log_level.clone();
         self.config.advanced.write_settle_ms = self.write_settle_ms;
         self.config.advanced.check_for_updates = self.check_for_updates;
+        self.config.advanced.update_check_interval_hours = self.update_check_interval_hours;
+        self.config.advanced.update_repo = self.update_repo.clone();
 
         self.config.ui.start_with_windows = self.autostart;
         self.config.ui.minimize_to_tray = self.minimize_to_tray;
@@ -643,9 +664,14 @@ impl SettingsApp {
             }
         };
 
+        info!(folder = %folder.path, count = paths.len(),
+            "Applying post-upload action to already-uploaded files");
+
         let mut count = 0u32;
         for path_str in &paths {
-            let path = std::path::Path::new(path_str);
+            // Strip the \\?\ extended-path prefix that the file watcher adds.
+            let clean = path_str.strip_prefix(r"\\?\").unwrap_or(path_str);
+            let path = std::path::Path::new(clean);
             if !path.exists() {
                 continue;
             }
@@ -653,7 +679,7 @@ impl SettingsApp {
             match folder.post_upload {
                 PostUpload::Trash => {
                     if let Err(e) = crate::upload::worker::trash_file(path, &folder.path) {
-                        tracing::warn!(file = %path_str, error = %e,
+                        tracing::warn!(file = %clean, error = %e,
                             "Failed to trash existing uploaded file");
                     } else {
                         count += 1;
@@ -661,7 +687,7 @@ impl SettingsApp {
                 }
                 PostUpload::Delete => {
                     if let Err(e) = std::fs::remove_file(path) {
-                        tracing::warn!(file = %path_str, error = %e,
+                        tracing::warn!(file = %clean, error = %e,
                             "Failed to delete existing uploaded file");
                     } else {
                         count += 1;
