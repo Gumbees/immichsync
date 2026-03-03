@@ -8,6 +8,7 @@ pub mod drives;
 pub mod encryption;
 pub mod install;
 pub mod known_folders;
+pub mod shortcuts;
 pub mod single_instance;
 
 // Re-export the most-used public types at the platform crate boundary so
@@ -19,4 +20,5 @@ pub use drives::{has_dcim_folder, list_drives, DriveInfo, DriveType};
 pub use encryption::{decrypt_api_key, encrypt_api_key, is_encrypted, EncryptionError};
 pub use install::{install_exe, installed_exe_path, is_running_installed, migrate_legacy_data, relaunch_installed};
 pub use known_folders::{get_pictures_folder, KnownFolderError};
+pub use shortcuts::{create_desktop_shortcut, create_start_menu_shortcut, ShortcutError};
 pub use single_instance::{SingleInstance, SingleInstanceError};

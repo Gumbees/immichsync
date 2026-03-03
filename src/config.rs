@@ -157,6 +157,10 @@ pub struct UiConfig {
 
     /// Show a toast notification when a batch upload completes.
     pub notification_on_complete: bool,
+
+    /// Run without installing to AppData. When true, the install dialog
+    /// is suppressed and the app runs from its current location.
+    pub portable_mode: bool,
 }
 
 impl Default for UiConfig {
@@ -166,6 +170,7 @@ impl Default for UiConfig {
             minimize_to_tray: true,
             show_notifications: true,
             notification_on_complete: true,
+            portable_mode: false,
         }
     }
 }

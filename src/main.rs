@@ -41,38 +41,63 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    // ── Self-install + relaunch ──────────────────────────────────────────
-    // Copy the running exe into the data directory so autostart and
-    // subprocesses always resolve to a stable path.
-    if let Err(e) = platform::install_exe() {
-        tracing::warn!(error = %e, "Self-install failed (continuing from current location)");
+    // ── Subprocess window mode ──────────────────────────────────────────
+    // When launched with `--window <type>`, run only that UI window and
+    // exit.  Each subprocess gets its own winit EventLoop, avoiding the
+    // "EventLoop can't be recreated" limitation of winit 0.30.
+    //
+    // IMPORTANT: This must come before the install check, otherwise
+    // `--window install` would try to show the install dialog recursively.
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 2 && args[1] == "--window" {
+        return run_window_subprocess(&args[2]);
     }
 
-    // If we're not running from the installed location, relaunch from
-    // there and exit this process.  After relaunch is_running_installed()
-    // returns true, so this only fires once.
+    // ── Install dialog + relaunch ────────────────────────────────────────
+    // If not running from the installed location, show an install dialog
+    // (unless portable_mode is set). The dialog handles copying the exe,
+    // creating shortcuts, and setting autostart.
     match platform::is_running_installed() {
         Ok(false) => {
-            info!("Not running from installed path, relaunching");
-            if let Err(e) = platform::relaunch_installed() {
-                tracing::warn!(error = %e, "Relaunch failed, continuing from current location");
+            // Check if user previously chose portable mode.
+            let portable = config::Config::load()
+                .map(|c| c.ui.portable_mode)
+                .unwrap_or(false);
+
+            if portable {
+                info!("Portable mode enabled, skipping install");
+            } else {
+                info!("Not running from installed path, showing install dialog");
+
+                let exe = std::env::current_exe().expect("current_exe");
+                let status = std::process::Command::new(&exe)
+                    .args(["--window", "install"])
+                    .status();
+
+                match status {
+                    Ok(s) if s.code() == Some(0) => {
+                        // User clicked Install — relaunch from installed path.
+                        info!("Install complete, relaunching from installed path");
+                        if let Err(e) = platform::relaunch_installed() {
+                            tracing::warn!(error = %e, "Relaunch failed, continuing from current location");
+                        }
+                        // relaunch_installed calls process::exit on success.
+                        // If we get here, it failed — fall through.
+                    }
+                    Ok(_) => {
+                        // User chose Run Portable (exit code 1) or closed dialog.
+                        info!("User chose portable mode, continuing from current location");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to launch install dialog, continuing");
+                    }
+                }
             }
-            // If relaunch_installed succeeded it calls process::exit and
-            // never returns.  If we get here, it failed — fall through.
         }
         Err(e) => {
             tracing::warn!(error = %e, "Could not check install status, continuing");
         }
         Ok(true) => {}
-    }
-
-    // ── Subprocess window mode ──────────────────────────────────────────
-    // When launched with `--window <type>`, run only that UI window and
-    // exit.  Each subprocess gets its own winit EventLoop, avoiding the
-    // "EventLoop can't be recreated" limitation of winit 0.30.
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() > 2 && args[1] == "--window" {
-        return run_window_subprocess(&args[2]);
     }
 
     info!("ImmichSync starting");
@@ -174,6 +199,10 @@ fn main() -> anyhow::Result<()> {
 /// limitation that only allows one EventLoop per process lifetime.
 fn run_window_subprocess(window_type: &str) -> anyhow::Result<()> {
     match window_type {
+        "install" => {
+            info!("Subprocess: running install dialog");
+            ui::install::run_install_dialog();
+        }
         "wizard" => {
             info!("Subprocess: running first-run wizard");
             ui::first_run::run_first_run_wizard();
