@@ -32,6 +32,15 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    // ── Subprocess window mode ──────────────────────────────────────────
+    // When launched with `--window <type>`, run only that UI window and
+    // exit.  Each subprocess gets its own winit EventLoop, avoiding the
+    // "EventLoop can't be recreated" limitation of winit 0.30.
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 2 && args[1] == "--window" {
+        return run_window_subprocess(&args[2]);
+    }
+
     info!("ImmichSync starting");
 
     // ── Single-instance check ────────────────────────────────────────────
@@ -49,15 +58,29 @@ fn main() -> anyhow::Result<()> {
     info!("Config loaded");
 
     // ── First-run wizard ────────────────────────────────────────────────
+    // Runs as a child process so it gets its own winit EventLoop, leaving
+    // the main process free to spawn further UI windows later.
     if config.server.url.is_empty() {
         info!("Server not configured, launching first-run wizard");
-        match ui::first_run::run_first_run_wizard() {
-            Some(new_config) => {
-                config = new_config;
-                info!("First-run wizard completed");
+        let exe = std::env::current_exe()?;
+        let status = std::process::Command::new(&exe)
+            .args(["--window", "wizard"])
+            .status();
+        match status {
+            Ok(s) if s.success() => {
+                // Reload config — the wizard saves to disk on completion.
+                config = config::Config::load()?;
+                if config.server.url.is_empty() {
+                    info!("First-run wizard cancelled, continuing with defaults");
+                } else {
+                    info!("First-run wizard completed");
+                }
             }
-            None => {
-                info!("First-run wizard cancelled, continuing with defaults");
+            Ok(s) => {
+                tracing::warn!(code = ?s.code(), "First-run wizard exited abnormally");
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to launch first-run wizard");
             }
         }
     }
@@ -105,5 +128,38 @@ fn main() -> anyhow::Result<()> {
     app.init()?;
     app.run(); // blocks until Quit
 
+    Ok(())
+}
+
+/// Run a single UI window in subprocess mode and exit.
+///
+/// Called when the binary is launched with `--window <type>`.  Each
+/// subprocess gets its own winit EventLoop, sidestepping the winit 0.30
+/// limitation that only allows one EventLoop per process lifetime.
+fn run_window_subprocess(window_type: &str) -> anyhow::Result<()> {
+    match window_type {
+        "wizard" => {
+            info!("Subprocess: running first-run wizard");
+            ui::first_run::run_first_run_wizard();
+        }
+        "settings" => {
+            info!("Subprocess: running settings window");
+            let config = config::Config::load()?;
+            ui::settings::show_settings(config, None);
+        }
+        "about" => {
+            info!("Subprocess: running about dialog");
+            ui::about::show_about();
+        }
+        "log" => {
+            info!("Subprocess: running upload log");
+            let database = db::Database::open()?;
+            let db_store = Arc::new(db::DbStore::new(database));
+            ui::upload_log::show_upload_log(db_store);
+        }
+        other => {
+            tracing::error!("Unknown window type: {other}");
+        }
+    }
     Ok(())
 }

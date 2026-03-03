@@ -308,6 +308,10 @@ impl App {
     }
 
     /// Dispatch a tray menu action (everything except Quit).
+    ///
+    /// UI windows (Settings, About, Upload Log) are spawned as child
+    /// processes so each gets its own winit EventLoop — winit 0.30 only
+    /// allows one EventLoop per process lifetime.
     fn handle_tray_action(&mut self, action: TrayAction) {
         match action {
             TrayAction::Pause => {
@@ -333,14 +337,10 @@ impl App {
                     info!("Settings window already open, ignoring");
                     return;
                 }
-                let config = self.config.clone();
                 let (tx, rx) = std::sync::mpsc::channel();
                 self.settings_rx = Some(rx);
                 let flag = self.window_open.settings.clone();
-                std::thread::spawn(move || {
-                    crate::ui::settings::show_settings(config, Some(tx));
-                    flag.store(false, Ordering::SeqCst);
-                });
+                spawn_window_subprocess("settings", flag, Some(tx));
             }
             TrayAction::UploadNow => {
                 info!("Upload Now requested");
@@ -351,22 +351,15 @@ impl App {
                     return;
                 }
                 let flag = self.window_open.about.clone();
-                std::thread::spawn(move || {
-                    crate::ui::about::show_about();
-                    flag.store(false, Ordering::SeqCst);
-                });
+                spawn_window_subprocess("about", flag, None);
             }
             TrayAction::ViewLog => {
                 if self.window_open.upload_log.swap(true, Ordering::SeqCst) {
                     info!("Upload Log window already open, ignoring");
                     return;
                 }
-                let db = self.db.clone();
                 let flag = self.window_open.upload_log.clone();
-                std::thread::spawn(move || {
-                    crate::ui::upload_log::show_upload_log(db);
-                    flag.store(false, Ordering::SeqCst);
-                });
+                spawn_window_subprocess("log", flag, None);
             }
             TrayAction::Quit => {
                 // Handled in run() directly.
@@ -508,6 +501,49 @@ async fn bridge_watch_to_pipeline(
         }
     }
     info!("Watch→pipeline bridge stopped");
+}
+
+/// Spawn a UI window as a child process.
+///
+/// Each child process runs `immichsync.exe --window <type>`, giving it its
+/// own winit EventLoop.  A background thread waits for the subprocess to
+/// exit, then clears the `open_flag` and optionally reloads config from
+/// disk (for settings).
+fn spawn_window_subprocess(
+    window_type: &'static str,
+    open_flag: Arc<AtomicBool>,
+    config_tx: Option<std::sync::mpsc::Sender<crate::config::Config>>,
+) {
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(e) => {
+            warn!(error = %e, "Failed to get current exe path");
+            open_flag.store(false, Ordering::SeqCst);
+            return;
+        }
+    };
+
+    std::thread::spawn(move || {
+        info!(window_type, "Spawning window subprocess");
+        match std::process::Command::new(&exe)
+            .args(["--window", window_type])
+            .status()
+        {
+            Ok(status) => {
+                info!(window_type, ?status, "Window subprocess exited");
+                // For settings, reload config from disk after the subprocess exits.
+                if let Some(tx) = config_tx {
+                    if let Ok(config) = crate::config::Config::load() {
+                        let _ = tx.send(config);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(window_type, error = %e, "Failed to spawn window subprocess");
+            }
+        }
+        open_flag.store(false, Ordering::SeqCst);
+    });
 }
 
 /// Find the watched folder that contains `file_path` by walking up the
