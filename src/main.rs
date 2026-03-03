@@ -129,25 +129,44 @@ fn main() -> anyhow::Result<()> {
                     }
                 } else {
                     // No installed copy — show fresh install dialog.
-                    info!("Not running from installed path, showing install dialog");
-
                     let exe = std::env::current_exe().expect("current_exe");
-                    let status = std::process::Command::new(&exe)
-                        .args(["--window", "install"])
-                        .status();
+                    info!(
+                        exe = %exe.display(),
+                        "Not running from installed path, spawning install dialog subprocess"
+                    );
 
-                    match status {
-                        Ok(s) if s.code() == Some(0) => {
-                            info!("Install complete, relaunching from installed path");
-                            if let Err(e) = platform::relaunch_installed() {
-                                tracing::warn!(error = %e, "Relaunch failed, continuing from current location");
+                    let child = std::process::Command::new(&exe)
+                        .args(["--window", "install"])
+                        .stderr(std::process::Stdio::piped())
+                        .spawn();
+
+                    match child {
+                        Ok(child) => {
+                            info!(pid = child.id(), "Install dialog subprocess spawned");
+                            match child.wait_with_output() {
+                                Ok(output) => {
+                                    let code = output.status.code();
+                                    info!(?code, "Install dialog subprocess exited");
+                                    if !output.stderr.is_empty() {
+                                        let stderr = String::from_utf8_lossy(&output.stderr);
+                                        tracing::debug!(stderr = %stderr, "Install dialog stderr");
+                                    }
+                                    if code == Some(0) {
+                                        info!("Install complete, relaunching from installed path");
+                                        if let Err(e) = platform::relaunch_installed() {
+                                            tracing::warn!(error = %e, "Relaunch failed, continuing from current location");
+                                        }
+                                    } else {
+                                        info!("User chose portable mode, continuing from current location");
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "Failed to wait for install dialog subprocess");
+                                }
                             }
                         }
-                        Ok(_) => {
-                            info!("User chose portable mode, continuing from current location");
-                        }
                         Err(e) => {
-                            tracing::warn!(error = %e, "Failed to launch install dialog, continuing");
+                            tracing::warn!(error = %e, "Failed to spawn install dialog subprocess");
                         }
                     }
                 }
@@ -156,7 +175,11 @@ fn main() -> anyhow::Result<()> {
         Err(e) => {
             tracing::warn!(error = %e, "Could not check install status, continuing");
         }
-        Ok(true) => {}
+        Ok(true) => {
+            // Running from installed location — check for updates before starting the tray app.
+            info!("Running from installed path, checking for updates");
+            check_for_update_on_startup();
+        }
     }
 
     info!("ImmichSync starting");
@@ -249,6 +272,91 @@ fn main() -> anyhow::Result<()> {
     app.run(); // blocks until Quit
 
     Ok(())
+}
+
+/// Blocking update check at startup (before the tray app starts).
+///
+/// Runs a quick GitHub API check. If an update is available, serializes the
+/// info to a temp file, spawns the update dialog as a subprocess, and waits.
+/// If the update was applied (exit code 0), relaunches self.  Otherwise
+/// continues to the normal tray app.
+fn check_for_update_on_startup() {
+    // Load config to check if updates are enabled.
+    let updates_enabled = config::Config::load()
+        .map(|c| c.advanced.check_for_updates)
+        .unwrap_or(true);
+
+    if !updates_enabled {
+        info!("Update checks disabled in config, skipping startup check");
+        return;
+    }
+
+    // Build a temporary tokio runtime for the async check.
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to create runtime for update check");
+            return;
+        }
+    };
+
+    let result = rt.block_on(updater::check_for_update());
+
+    match result {
+        updater::UpdateCheckResult::Available(info) => {
+            info!(
+                current = %info.current_version,
+                new = %info.new_version,
+                "Update available at startup, showing update dialog"
+            );
+
+            // Serialize UpdateInfo to a temp JSON file.
+            let temp_dir = std::env::temp_dir();
+            let info_path = temp_dir.join("immichsync_update_info.json");
+            let info_json = match serde_json::to_string(&info) {
+                Ok(j) => j,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to serialize update info");
+                    return;
+                }
+            };
+            if let Err(e) = std::fs::write(&info_path, &info_json) {
+                tracing::warn!(error = %e, "Failed to write update info file");
+                return;
+            }
+
+            // Spawn the update dialog subprocess.
+            let exe = std::env::current_exe().expect("current_exe");
+            let info_path_str = info_path.display().to_string();
+
+            info!("Spawning update dialog subprocess");
+            match std::process::Command::new(&exe)
+                .args(["--window", "update", "--update-info", &info_path_str])
+                .status()
+            {
+                Ok(status) if status.code() == Some(0) => {
+                    // Update was applied — relaunch self.
+                    info!("Startup update applied, relaunching");
+                    updater::relaunch_self();
+                }
+                Ok(status) => {
+                    info!(code = ?status.code(), "User skipped startup update, continuing to tray app");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to launch update dialog");
+                }
+            }
+        }
+        updater::UpdateCheckResult::UpToDate => {
+            info!("Already on latest version at startup");
+        }
+        updater::UpdateCheckResult::Failed(msg) => {
+            tracing::warn!(error = %msg, "Startup update check failed, continuing");
+        }
+    }
 }
 
 /// Run a single UI window in subprocess mode and exit.

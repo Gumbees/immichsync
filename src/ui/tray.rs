@@ -45,6 +45,7 @@ pub enum TrayAction {
     ViewLog,
     CheckForUpdates,
     OpenUpdateDialog,
+    RestartToUpdate,
     Quit,
 }
 
@@ -73,6 +74,7 @@ const ID_ABOUT: &str = "about";
 const ID_VIEW_LOG: &str = "view_log";
 const ID_CHECK_UPDATES: &str = "check_updates";
 const ID_UPDATE_AVAILABLE: &str = "update_available";
+const ID_RESTART_TO_UPDATE: &str = "restart_to_update";
 const ID_QUIT: &str = "quit";
 
 // ---------------------------------------------------------------------------
@@ -185,6 +187,7 @@ pub struct TrayApp {
     #[allow(dead_code)]
     check_updates_item: MenuItem,
     update_available_item: MenuItem,
+    restart_to_update_item: MenuItem,
 
     /// Sender half of the action channel.  Cloned into the menu-event handler.
     action_tx: mpsc::Sender<TrayAction>,
@@ -220,6 +223,7 @@ impl TrayApp {
         let about_item = MenuItem::with_id(ID_ABOUT, "About ImmichSync", true, None);
         let check_updates_item = MenuItem::with_id(ID_CHECK_UPDATES, "Check for Updates", true, None);
         let update_available_item = MenuItem::with_id(ID_UPDATE_AVAILABLE, "Update Available!", false, None);
+        let restart_to_update_item = MenuItem::with_id(ID_RESTART_TO_UPDATE, "Restart to Update", false, None);
         let quit_item = MenuItem::with_id(ID_QUIT, "Quit", true, None);
 
         // ---- Assemble context menu ----
@@ -254,6 +258,8 @@ impl TrayApp {
         menu.append(&check_updates_item)
             .map_err(|e| TrayError::Build(e.to_string()))?;
         menu.append(&update_available_item)
+            .map_err(|e| TrayError::Build(e.to_string()))?;
+        menu.append(&restart_to_update_item)
             .map_err(|e| TrayError::Build(e.to_string()))?;
         menu.append(&PredefinedMenuItem::separator())
             .map_err(|e| TrayError::Build(e.to_string()))?;
@@ -297,6 +303,7 @@ impl TrayApp {
                                 ID_VIEW_LOG => Some(TrayAction::ViewLog),
                                 ID_CHECK_UPDATES => Some(TrayAction::CheckForUpdates),
                                 ID_UPDATE_AVAILABLE => Some(TrayAction::OpenUpdateDialog),
+                                ID_RESTART_TO_UPDATE => Some(TrayAction::RestartToUpdate),
                                 ID_QUIT => Some(TrayAction::Quit),
                                 _ => None,
                             };
@@ -326,6 +333,7 @@ impl TrayApp {
             server_item,
             check_updates_item,
             update_available_item,
+            restart_to_update_item,
             action_tx,
         };
 
@@ -390,6 +398,26 @@ impl TrayApp {
             None => {
                 self.update_available_item.set_text("Update Available!");
                 self.update_available_item.set_enabled(false);
+            }
+        }
+    }
+
+    /// Show or hide the "Restart to Update" menu item.
+    ///
+    /// When `version` is `Some`, the item is shown and the "Update Available!"
+    /// item is hidden (download is already done). When `None`, the item is hidden.
+    pub fn set_restart_to_update(&mut self, version: Option<&str>) {
+        match version {
+            Some(v) => {
+                self.restart_to_update_item.set_text(&format!("Restart to Update (v{v})"));
+                self.restart_to_update_item.set_enabled(true);
+                // Hide the "Update Available" item since the download is done.
+                self.update_available_item.set_text("Update Available!");
+                self.update_available_item.set_enabled(false);
+            }
+            None => {
+                self.restart_to_update_item.set_text("Restart to Update");
+                self.restart_to_update_item.set_enabled(false);
             }
         }
     }

@@ -56,6 +56,16 @@ impl Notifications {
         self.show_toast("ImmichSync Error", msg);
     }
 
+    /// Show a toast notification with a custom title and body.
+    ///
+    /// Respects the global notifications toggle.
+    pub fn show_toast_raw(&self, title: &str, body: &str) {
+        if !self.enabled {
+            return;
+        }
+        self.show_toast(title, body);
+    }
+
     fn show_toast(&self, title: &str, body: &str) {
         debug!(title, body, "Showing toast notification");
 

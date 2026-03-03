@@ -250,6 +250,21 @@ pub fn cleanup_old_exe() {
     }
 }
 
+// ─── Background download + apply ─────────────────────────────────────────────
+
+/// Download and apply an update without any UI.
+///
+/// Used by the periodic background update check in `app.rs`. Returns `Ok(())`
+/// if the update was downloaded and applied (caller should prompt for restart),
+/// or an error if anything failed.
+pub fn download_and_apply(info: &UpdateInfo) -> Result<(), UpdateError> {
+    info!(version = %info.new_version, "Background: downloading update");
+    let path = download_update_blocking(&info.download_url, |_, _| {})?;
+    apply_update(&path, &info.new_version)?;
+    info!(version = %info.new_version, "Background: update applied");
+    Ok(())
+}
+
 // ─── Relaunch ────────────────────────────────────────────────────────────────
 
 /// Relaunch the current exe (after update) and exit this process.

@@ -48,10 +48,14 @@ pub struct App {
     window_open: WindowOpenTracker,
     /// Receiver for async update check results.
     update_rx: Option<std::sync::mpsc::Receiver<UpdateCheckResult>>,
+    /// Receiver for background download completion results.
+    update_download_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// When the last update check was performed.
     last_update_check: Instant,
     /// Cached update info when an update is available.
     pending_update: Option<UpdateInfo>,
+    /// Set to true once the update has been downloaded and applied.
+    update_ready: bool,
 }
 
 /// Tracks whether each type of UI window is currently open, preventing
@@ -101,8 +105,10 @@ impl App {
             notifications,
             window_open: WindowOpenTracker::new(),
             update_rx: None,
+            update_download_rx: None,
             last_update_check: Instant::now(),
             pending_update: None,
+            update_ready: false,
         }
     }
 
@@ -236,6 +242,9 @@ impl App {
 
             // Poll for update check results.
             self.poll_update_check();
+
+            // Poll for background download completion.
+            self.poll_update_download();
 
             // Periodic re-check for updates (every 24h).
             if self.config.advanced.check_for_updates
@@ -427,6 +436,13 @@ impl App {
             TrayAction::OpenUpdateDialog => {
                 self.open_update_dialog();
             }
+            TrayAction::RestartToUpdate => {
+                if self.update_ready {
+                    info!("User requested restart to apply update");
+                    self.shutdown();
+                    updater::relaunch_self();
+                }
+            }
             TrayAction::Quit => {
                 // Handled in run() directly.
             }
@@ -535,6 +551,9 @@ impl App {
     }
 
     /// Poll the update check channel for results.
+    ///
+    /// When an update is found, auto-downloads it in the background instead of
+    /// just showing a notification.
     fn poll_update_check(&mut self) {
         let result = match self.update_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
             Some(r) => r,
@@ -546,16 +565,26 @@ impl App {
                 info!(
                     current = %info.current_version,
                     new = %info.new_version,
-                    "Update available"
+                    "Update available — starting background download"
                 );
 
-                // Show toast notification.
-                self.notifications.notify_update_available(&info);
+                // Show a downloading notification.
+                self.notifications.show_toast_raw(
+                    "Downloading Update",
+                    &format!("Downloading ImmichSync v{}...", info.new_version),
+                );
 
-                // Update tray menu.
-                if let Some(ref mut tray) = self.tray {
-                    tray.set_update_available(Some(&info.new_version));
-                }
+                // Kick off background download.
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.update_download_rx = Some(rx);
+
+                let info_clone = info.clone();
+                self.runtime.spawn_blocking(move || {
+                    match updater::download_and_apply(&info_clone) {
+                        Ok(()) => { let _ = tx.send(Ok(info_clone.new_version)); }
+                        Err(e) => { let _ = tx.send(Err(e.to_string())); }
+                    }
+                });
 
                 self.pending_update = Some(info);
             }
@@ -564,6 +593,43 @@ impl App {
             }
             UpdateCheckResult::Failed(msg) => {
                 warn!(error = %msg, "Update check failed");
+            }
+        }
+    }
+
+    /// Poll the background download channel for completion.
+    fn poll_update_download(&mut self) {
+        let result = match self.update_download_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            Some(r) => r,
+            None => return,
+        };
+
+        match result {
+            Ok(version) => {
+                info!(version = %version, "Background update downloaded and applied");
+                self.update_ready = true;
+
+                // Update tray menu to show "Restart to Update".
+                if let Some(ref mut tray) = self.tray {
+                    tray.set_restart_to_update(Some(&version));
+                }
+
+                self.notifications.show_toast_raw(
+                    "Update Ready",
+                    &format!("ImmichSync v{version} is ready — restart to apply."),
+                );
+            }
+            Err(e) => {
+                warn!(error = %e, "Background update download failed");
+
+                // Fall back to showing the manual "Update Available" item.
+                if let Some(ref info) = self.pending_update {
+                    if let Some(ref mut tray) = self.tray {
+                        tray.set_update_available(Some(&info.new_version));
+                    }
+                }
+
+                self.notifications.notify_error(&format!("Update download failed: {e}"));
             }
         }
     }
