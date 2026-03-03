@@ -67,7 +67,7 @@ The binary lands in `target/release/immichsync.exe`.
 
 ## Configuration
 
-Settings are stored in `%APPDATA%\ImmichSync\config.toml`. You can edit this directly or use the Settings UI.
+Settings are stored in `%APPDATA%\bees-roadhouse\immichsync\config.toml`. You can edit this directly or use the Settings UI.
 
 ```toml
 [server]
@@ -131,7 +131,7 @@ ImmichSync is free and open source. If it saves you time, consider supporting de
 
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE) for details.
+GPL-3.0-only — see [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 

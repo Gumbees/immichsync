@@ -308,6 +308,7 @@ immichsync/
 │   ├── app.rs                   # Application state, lifecycle management
 │   ├── config.rs                # Config loading/saving, TOML management
 │   ├── db.rs                    # SQLite state database
+│   ├── updater.rs               # GitHub Releases update checker and applier
 │   ├── watch/
 │   │   ├── mod.rs               # Watch engine orchestrator
 │   │   ├── folder.rs            # Folder watcher (notify-based)
@@ -331,20 +332,25 @@ immichsync/
 │   │   ├── tray.rs              # System tray icon and menu
 │   │   ├── settings.rs          # Settings window (egui)
 │   │   ├── notifications.rs     # Windows toast notifications
-│   │   └── first_run.rs         # First-run setup wizard
+│   │   ├── first_run.rs         # First-run setup wizard
+│   │   ├── install.rs           # Install/update dialog
+│   │   ├── update.rs            # Self-update download dialog
+│   │   ├── upload_log.rs        # Upload log viewer
+│   │   └── about.rs             # About dialog
 │   └── platform/
 │       ├── mod.rs               # Platform abstractions
 │       ├── known_folders.rs     # SHGetKnownFolderPath wrapper
 │       ├── autostart.rs         # Registry-based autostart
 │       ├── single_instance.rs   # Named mutex for single instance
-│       └── drives.rs            # Drive enumeration, type detection
+│       ├── drives.rs            # Drive enumeration, type detection
+│       ├── encryption.rs        # DPAPI + AES-256-GCM API key encryption
+│       ├── install.rs           # Self-install to AppData, version tracking
+│       └── shortcuts.rs         # Desktop/start menu shortcut creation
 ├── tests/
 │   ├── integration/
 │   │   ├── watch_test.rs
 │   │   └── upload_test.rs
 │   └── mock_server/             # Mock Immich server for testing
-└── installer/
-    └── wix/                     # WiX installer config
 ```
 
 ---
