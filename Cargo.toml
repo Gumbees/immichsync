@@ -39,6 +39,8 @@ windows = { version = "0.58", features = [
     "Win32_System_Registry",
     # known_folders.rs    — CoTaskMemFree (frees PWSTR from SHGetKnownFolderPath)
     "Win32_System_Com",
+    # shortcuts.rs        — IPropertyStore, PROPERTYKEY (AppUserModelID on .lnk)
+    "Win32_UI_Shell_PropertiesSystem",
 ] }
 
 # System tray

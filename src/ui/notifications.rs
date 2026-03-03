@@ -45,7 +45,7 @@ impl Notifications {
     fn show_toast(&self, title: &str, body: &str) {
         debug!(title, body, "Showing toast notification");
 
-        if let Err(e) = winrt_notification::Toast::new("ImmichSync")
+        if let Err(e) = winrt_notification::Toast::new(crate::platform::APP_USER_MODEL_ID)
             .title(title)
             .text1(body)
             .show()

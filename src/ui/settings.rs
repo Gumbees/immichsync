@@ -76,6 +76,7 @@ pub fn show_settings(config: Config, result_tx: Option<Sender<Config>>) {
         autostart: config.ui.start_with_windows,
         minimize_to_tray: config.ui.minimize_to_tray,
         show_notifications: config.ui.show_notifications,
+        notify_on_complete: config.ui.notification_on_complete,
         write_settle_ms: config.advanced.write_settle_ms,
 
         // Watch Folders tab
@@ -128,6 +129,7 @@ struct SettingsApp {
     autostart: bool,
     minimize_to_tray: bool,
     show_notifications: bool,
+    notify_on_complete: bool,
     write_settle_ms: u64,
 
     // Watch Folders tab
@@ -408,6 +410,11 @@ impl SettingsApp {
         ui.checkbox(&mut self.autostart, "Start with Windows");
         ui.checkbox(&mut self.minimize_to_tray, "Minimize to system tray");
         ui.checkbox(&mut self.show_notifications, "Show notifications");
+        ui.add_enabled_ui(self.show_notifications, |ui| {
+            ui.indent("notify_indent", |ui| {
+                ui.checkbox(&mut self.notify_on_complete, "Notify when uploads complete");
+            });
+        });
     }
 }
 
@@ -467,6 +474,7 @@ impl SettingsApp {
         self.config.ui.start_with_windows = self.autostart;
         self.config.ui.minimize_to_tray = self.minimize_to_tray;
         self.config.ui.show_notifications = self.show_notifications;
+        self.config.ui.notification_on_complete = self.notify_on_complete;
 
         // Save config to disk.
         if let Err(e) = self.config.save() {

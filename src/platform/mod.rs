@@ -11,6 +11,12 @@ pub mod known_folders;
 pub mod shortcuts;
 pub mod single_instance;
 
+/// Application User Model ID for toast notifications and Start Menu shortcuts.
+///
+/// Must match the AppUserModelID property set on the Start Menu shortcut;
+/// otherwise Windows silently drops toast notifications from desktop apps.
+pub const APP_USER_MODEL_ID: &str = "BeesRoadhouse.ImmichSync";
+
 // Re-export the most-used public types at the platform crate boundary so
 // callers can write `platform::SingleInstance` instead of
 // `platform::single_instance::SingleInstance`.

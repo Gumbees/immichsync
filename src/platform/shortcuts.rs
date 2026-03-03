@@ -1,34 +1,50 @@
 // Windows shortcut (.lnk) creation via COM.
 //
 // Uses IShellLinkW + IPersistFile to create standard Windows shortcuts
-// on the desktop and in the Start Menu.
+// on the desktop and in the Start Menu.  Sets AppUserModelID on each
+// shortcut so Windows can route toast notifications to our app.
 //
-// Required Cargo.toml features (already present):
-//   "Win32_UI_Shell"   — IShellLinkW, SHGetKnownFolderPath, FOLDERID_*
-//   "Win32_System_Com" — CoInitializeEx, CoCreateInstance, IPersistFile, CoTaskMemFree
+// Required Cargo.toml features:
+//   "Win32_UI_Shell"                — IShellLinkW, SHGetKnownFolderPath, FOLDERID_*
+//   "Win32_System_Com"              — CoInitializeEx, CoCreateInstance, IPersistFile, CoTaskMemFree
+//   "Win32_UI_Shell_PropertiesSystem" — IPropertyStore, PROPERTYKEY
 
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 use tracing::info;
-use windows::core::{Interface, GUID, HSTRING, PCWSTR, PWSTR};
+use windows::core::{Interface, GUID, HSTRING, PCWSTR, PROPVARIANT, PWSTR};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, IPersistFile, CLSCTX_INPROC_SERVER,
     COINIT_APARTMENTTHREADED,
 };
+use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};
 use windows::Win32::UI::Shell::{
     IShellLinkW, SHGetKnownFolderPath, FOLDERID_Desktop, FOLDERID_Programs, KNOWN_FOLDER_FLAG,
 };
 
 // CLSID_ShellLink: {00021401-0000-0000-C000-000000000046}
-const CLSID_SHELLLINK: GUID =
-    GUID::from_values(0x00021401, 0x0000, 0x0000, [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46]);
+const CLSID_SHELLLINK: GUID = GUID::from_values(
+    0x00021401,
+    0x0000,
+    0x0000,
+    [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
+);
+
+// PKEY_AppUserModel_ID: {9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}, pid 5
+const PKEY_APPUSERMODEL_ID: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_values(
+        0x9F4C2855,
+        0x9F79,
+        0x4B39,
+        [0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3],
+    ),
+    pid: 5,
+};
 
 #[derive(Debug, Error)]
 pub enum ShortcutError {
-    #[error("COM initialization failed: {0}")]
-    ComInit(#[source] windows::core::Error),
-
     #[error("failed to create ShellLink instance: {0}")]
     CreateInstance(#[source] windows::core::Error),
 
@@ -49,6 +65,9 @@ pub enum ShortcutError {
 
     #[error("failed to save .lnk file: {0}")]
     Save(#[source] windows::core::Error),
+
+    #[error("failed to set AppUserModelID: {0}")]
+    SetAppId(#[source] windows::core::Error),
 
     #[error("failed to resolve known folder: {0}")]
     KnownFolder(#[source] windows::core::Error),
@@ -87,8 +106,12 @@ pub fn create_start_menu_shortcut(
     Ok(lnk_path)
 }
 
-/// Create a .lnk shortcut file via COM.
-fn create_shortcut(exe_path: &Path, lnk_path: &Path, description: &str) -> Result<(), ShortcutError> {
+/// Create a .lnk shortcut file via COM with AppUserModelID set.
+fn create_shortcut(
+    exe_path: &Path,
+    lnk_path: &Path,
+    description: &str,
+) -> Result<(), ShortcutError> {
     unsafe {
         // Initialize COM (apartment-threaded). If already initialized, the
         // call returns S_FALSE which is still Ok.
@@ -124,7 +147,18 @@ fn create_shortcut(exe_path: &Path, lnk_path: &Path, description: &str) -> Resul
                 .map_err(ShortcutError::SetWorkingDir)?;
         }
 
-        // Query IPersistFile and save the .lnk file.
+        // Set AppUserModelID so toast notifications can find us.
+        let prop_store: IPropertyStore = shell_link
+            .cast()
+            .map_err(ShortcutError::SetAppId)?;
+
+        let aumid = PROPVARIANT::from(super::APP_USER_MODEL_ID);
+        prop_store
+            .SetValue(&PKEY_APPUSERMODEL_ID, &aumid)
+            .map_err(ShortcutError::SetAppId)?;
+        prop_store.Commit().map_err(ShortcutError::SetAppId)?;
+
+        // Save the .lnk file via IPersistFile.
         let persist_file: IPersistFile = shell_link
             .cast()
             .map_err(ShortcutError::QueryPersistFile)?;
@@ -163,7 +197,3 @@ fn get_known_folder(folder_id: &GUID) -> Result<PathBuf, ShortcutError> {
 
     Ok(path)
 }
-
-// OsStr extension for encode_wide — needed because std::os::windows is
-// behind cfg(target_os = "windows") which is always true for this project.
-use std::os::windows::ffi::OsStrExt;
