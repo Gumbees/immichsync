@@ -43,6 +43,7 @@ pub enum TrayAction {
     OpenSettings,
     About,
     ViewLog,
+    ViewTrash,
     CheckForUpdates,
     OpenUpdateDialog,
     RestartToUpdate,
@@ -72,6 +73,7 @@ const ID_UPLOAD_NOW: &str = "upload_now";
 const ID_SETTINGS: &str = "settings";
 const ID_ABOUT: &str = "about";
 const ID_VIEW_LOG: &str = "view_log";
+const ID_VIEW_TRASH: &str = "view_trash";
 const ID_CHECK_UPDATES: &str = "check_updates";
 const ID_UPDATE_AVAILABLE: &str = "update_available";
 const ID_RESTART_TO_UPDATE: &str = "restart_to_update";
@@ -220,6 +222,7 @@ impl TrayApp {
         let upload_now_item = MenuItem::with_id(ID_UPLOAD_NOW, "Upload Now", true, None);
         let settings_item = MenuItem::with_id(ID_SETTINGS, "Settings", true, None);
         let view_log_item = MenuItem::with_id(ID_VIEW_LOG, "View Upload Log", true, None);
+        let view_trash_item = MenuItem::with_id(ID_VIEW_TRASH, "View Trash", true, None);
         let about_item = MenuItem::with_id(ID_ABOUT, "About ImmichSync", true, None);
         let check_updates_item = MenuItem::with_id(ID_CHECK_UPDATES, "Check for Updates", true, None);
         let update_available_item = MenuItem::with_id(ID_UPDATE_AVAILABLE, "Update Available!", false, None);
@@ -252,6 +255,8 @@ impl TrayApp {
         menu.append(&settings_item)
             .map_err(|e| TrayError::Build(e.to_string()))?;
         menu.append(&view_log_item)
+            .map_err(|e| TrayError::Build(e.to_string()))?;
+        menu.append(&view_trash_item)
             .map_err(|e| TrayError::Build(e.to_string()))?;
         menu.append(&about_item)
             .map_err(|e| TrayError::Build(e.to_string()))?;
@@ -301,6 +306,7 @@ impl TrayApp {
                                 ID_SETTINGS => Some(TrayAction::OpenSettings),
                                 ID_ABOUT => Some(TrayAction::About),
                                 ID_VIEW_LOG => Some(TrayAction::ViewLog),
+                                ID_VIEW_TRASH => Some(TrayAction::ViewTrash),
                                 ID_CHECK_UPDATES => Some(TrayAction::CheckForUpdates),
                                 ID_UPDATE_AVAILABLE => Some(TrayAction::OpenUpdateDialog),
                                 ID_RESTART_TO_UPDATE => Some(TrayAction::RestartToUpdate),

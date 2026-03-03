@@ -65,6 +65,7 @@ pub struct WindowOpenTracker {
     pub settings: Arc<AtomicBool>,
     pub about: Arc<AtomicBool>,
     pub upload_log: Arc<AtomicBool>,
+    pub trash_log: Arc<AtomicBool>,
     pub update: Arc<AtomicBool>,
 }
 
@@ -74,6 +75,7 @@ impl WindowOpenTracker {
             settings: Arc::new(AtomicBool::new(false)),
             about: Arc::new(AtomicBool::new(false)),
             upload_log: Arc::new(AtomicBool::new(false)),
+            trash_log: Arc::new(AtomicBool::new(false)),
             update: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -431,6 +433,14 @@ impl App {
                 }
                 let flag = self.window_open.upload_log.clone();
                 spawn_window_subprocess("log", flag, None);
+            }
+            TrayAction::ViewTrash => {
+                if self.window_open.trash_log.swap(true, Ordering::SeqCst) {
+                    info!("Trash Log window already open, ignoring");
+                    return;
+                }
+                let flag = self.window_open.trash_log.clone();
+                spawn_window_subprocess("trash-log", flag, None);
             }
             TrayAction::CheckForUpdates => {
                 info!("Manual update check requested");

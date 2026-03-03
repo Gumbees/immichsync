@@ -459,6 +459,12 @@ fn run_window_subprocess(window_type: &str) -> anyhow::Result<()> {
             let db_store = Arc::new(db::DbStore::new(database));
             ui::upload_log::show_upload_log(db_store);
         }
+        "trash-log" => {
+            info!("Subprocess: running trash log");
+            let database = db::Database::open()?;
+            let db_store = Arc::new(db::DbStore::new(database));
+            ui::trash_log::show_trash_log(db_store);
+        }
         other => {
             tracing::error!("Unknown window type: {other}");
         }
