@@ -122,12 +122,11 @@ fn main() -> anyhow::Result<()> {
                         debug_log(&format!("Spawning install-update dialog: {old_ver} -> {new_ver}"));
                         match spawn_install_dialog(&["--window", "install-update", "--old-version", &old_ver]) {
                             Some(0) => {
-                                debug_log("Install dialog returned 0 (installed), relaunching");
-                                info!("Update complete, relaunching from installed path");
-                                if let Err(e) = platform::relaunch_installed() {
-                                    debug_log(&format!("Relaunch failed: {e}"));
-                                    tracing::warn!(error = %e, "Relaunch failed, continuing from current location");
-                                }
+                                // The subprocess already relaunched from the installed path
+                                // and killed the old instance + parent. Just exit.
+                                debug_log("Install dialog returned 0 (installed), exiting");
+                                info!("Update complete, subprocess handled relaunch");
+                                return Ok(());
                             }
                             other => {
                                 debug_log(&format!("Install dialog returned {other:?}, continuing"));
@@ -149,12 +148,10 @@ fn main() -> anyhow::Result<()> {
                     info!("Not running from installed path, spawning install dialog");
                     match spawn_install_dialog(&["--window", "install"]) {
                         Some(0) => {
-                            debug_log("Install dialog returned 0 (installed), relaunching");
-                            info!("Install complete, relaunching from installed path");
-                            if let Err(e) = platform::relaunch_installed() {
-                                debug_log(&format!("Relaunch failed: {e}"));
-                                tracing::warn!(error = %e, "Relaunch failed, continuing from current location");
-                            }
+                            // The subprocess already relaunched from the installed path.
+                            debug_log("Install dialog returned 0 (installed), exiting");
+                            info!("Install complete, subprocess handled relaunch");
+                            return Ok(());
                         }
                         other => {
                             debug_log(&format!("Install dialog returned {other:?}, continuing portable"));

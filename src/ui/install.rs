@@ -220,6 +220,11 @@ impl InstallApp {
             }
         }
 
+        // Relaunch from installed path directly (the parent process was
+        // killed by taskkill, so we can't rely on it to relaunch).
+        info!(installed = %installed_path.display(), "Install complete, relaunching from installed path");
+        let _ = std::process::Command::new(&installed_path).spawn();
+
         *self.result.lock().unwrap() = InstallResult::Installed;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
@@ -242,9 +247,10 @@ fn kill_running_instances() {
     let our_pid = std::process::id();
 
     // Use taskkill to terminate all immichsync.exe processes except ours.
-    // /F = force, /FI = filter, /IM = image name.
+    // /F = force, /FI = filter by PID not equal to ours, /IM = image name.
+    let pid_filter = format!("PID ne {our_pid}");
     let output = std::process::Command::new("taskkill")
-        .args(["/F", "/IM", "immichsync.exe"])
+        .args(["/F", "/FI", &pid_filter, "/IM", "immichsync.exe"])
         .output();
 
     match output {
