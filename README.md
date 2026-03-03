@@ -125,9 +125,7 @@ Please keep PRs focused — one feature or fix per PR.
 
 ImmichSync is free and open source. If it saves you time, consider supporting development:
 
-- [GitHub Sponsors](https://github.com/sponsors/gumbees)
-- [Buy Me a Coffee](https://buymeacoffee.com/gumbees)
-- [Ko-fi](https://ko-fi.com/gumbees)
+- [Donate via Stripe](https://buy.stripe.com/8x214n0IjaoL0zwcsj4AU00)
 
 ## License
 
