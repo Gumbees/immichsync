@@ -113,8 +113,10 @@ pub fn set_autostart(enabled: bool) -> Result<(), AutostartError> {
     }
 
     let result = if enabled {
-        // Resolve the current executable path.
-        let exe = std::env::current_exe()?;
+        // Always point autostart at the installed exe path so the registry
+        // value is stable regardless of where the app was originally launched.
+        let exe = crate::platform::install::installed_exe_path()
+            .map_err(|e| AutostartError::ExePath(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
         let exe_str = exe.to_str().ok_or(AutostartError::ExePathEncoding)?;
 
         // Encode as a null-terminated wide string for REG_SZ.

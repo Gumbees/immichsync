@@ -625,13 +625,18 @@ fn spawn_window_subprocess(
     open_flag: Arc<AtomicBool>,
     config_tx: Option<std::sync::mpsc::Sender<crate::config::Config>>,
 ) {
-    let exe = match std::env::current_exe() {
-        Ok(e) => e,
-        Err(e) => {
-            warn!(error = %e, "Failed to get current exe path");
-            open_flag.store(false, Ordering::SeqCst);
-            return;
-        }
+    // Prefer the installed exe path so subprocesses always run from the
+    // stable install location, falling back to current_exe if unavailable.
+    let exe = match crate::platform::install::installed_exe_path() {
+        Ok(p) if p.exists() => p,
+        _ => match std::env::current_exe() {
+            Ok(e) => e,
+            Err(e) => {
+                warn!(error = %e, "Failed to get current exe path");
+                open_flag.store(false, Ordering::SeqCst);
+                return;
+            }
+        },
     };
 
     std::thread::spawn(move || {

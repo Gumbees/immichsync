@@ -57,21 +57,3 @@ pub fn get_pictures_folder() -> Result<PathBuf, KnownFolderError> {
     tracing::debug!("pictures folder: {}", path.display());
     Ok(path)
 }
-
-/// Return the application data directory (`%APPDATA%\ImmichSync`), creating
-/// it if it does not already exist.
-pub fn get_app_data_dir() -> PathBuf {
-    let dir = dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("ImmichSync");
-
-    if !dir.exists() {
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            tracing::warn!("could not create app data directory {}: {}", dir.display(), e);
-        } else {
-            tracing::debug!("created app data directory: {}", dir.display());
-        }
-    }
-
-    dir
-}

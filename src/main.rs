@@ -15,6 +15,15 @@ use std::sync::Arc;
 use tracing::info;
 
 fn main() -> anyhow::Result<()> {
+    // ── Legacy data migration ────────────────────────────────────────────
+    // Move config/db/logs from old %APPDATA%\ImmichSync\ to the new
+    // %APPDATA%\bees-roadhouse\immichsync\ path before anything else
+    // tries to read them.
+    if let Err(e) = platform::migrate_legacy_data() {
+        // Non-fatal: log to stderr since tracing isn't up yet.
+        eprintln!("Warning: legacy data migration failed: {e}");
+    }
+
     // ── Logging ──────────────────────────────────────────────────────────
     let data_dir = config::Config::data_dir()?;
     let log_dir = data_dir.join("logs");
@@ -31,6 +40,31 @@ fn main() -> anyhow::Result<()> {
                 .add_directive(tracing::Level::INFO.into()),
         )
         .init();
+
+    // ── Self-install + relaunch ──────────────────────────────────────────
+    // Copy the running exe into the data directory so autostart and
+    // subprocesses always resolve to a stable path.
+    if let Err(e) = platform::install_exe() {
+        tracing::warn!(error = %e, "Self-install failed (continuing from current location)");
+    }
+
+    // If we're not running from the installed location, relaunch from
+    // there and exit this process.  After relaunch is_running_installed()
+    // returns true, so this only fires once.
+    match platform::is_running_installed() {
+        Ok(false) => {
+            info!("Not running from installed path, relaunching");
+            if let Err(e) = platform::relaunch_installed() {
+                tracing::warn!(error = %e, "Relaunch failed, continuing from current location");
+            }
+            // If relaunch_installed succeeded it calls process::exit and
+            // never returns.  If we get here, it failed — fall through.
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Could not check install status, continuing");
+        }
+        Ok(true) => {}
+    }
 
     // ── Subprocess window mode ──────────────────────────────────────────
     // When launched with `--window <type>`, run only that UI window and
@@ -62,7 +96,9 @@ fn main() -> anyhow::Result<()> {
     // the main process free to spawn further UI windows later.
     if config.server.url.is_empty() {
         info!("Server not configured, launching first-run wizard");
-        let exe = std::env::current_exe()?;
+        let exe = platform::installed_exe_path()
+            .map(|p| if p.exists() { p } else { std::env::current_exe().unwrap_or(p) })
+            .unwrap_or_else(|_| std::env::current_exe().expect("current_exe"));
         let status = std::process::Command::new(&exe)
             .args(["--window", "wizard"])
             .status();

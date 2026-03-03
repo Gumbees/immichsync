@@ -1,6 +1,6 @@
 //! Configuration management for ImmichSync.
 //!
-//! Loads and saves `%APPDATA%\ImmichSync\config.toml`.
+//! Loads and saves `%APPDATA%\bees-roadhouse\immichsync\config.toml`.
 //! On first run (or missing file) returns compiled-in defaults.
 //! Writes are atomic: write to a temp file then rename.
 
@@ -200,7 +200,7 @@ impl Default for AdvancedConfig {
 
 /// Top-level application configuration.
 ///
-/// Stored at `%APPDATA%\ImmichSync\config.toml`.
+/// Stored at `%APPDATA%\bees-roadhouse\immichsync\config.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -224,11 +224,11 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Returns the `%APPDATA%\ImmichSync` directory, creating it if it does
-    /// not exist.
+    /// Returns the `%APPDATA%\bees-roadhouse\immichsync` directory, creating
+    /// it if it does not exist.
     pub fn data_dir() -> Result<PathBuf, ConfigError> {
         let base = dirs::config_dir().ok_or(ConfigError::NoDataDir)?;
-        let dir = base.join("ImmichSync");
+        let dir = base.join("bees-roadhouse").join("immichsync");
 
         if !dir.exists() {
             fs::create_dir_all(&dir).map_err(|source| ConfigError::CreateDir {

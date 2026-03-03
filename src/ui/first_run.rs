@@ -1,10 +1,11 @@
 // First-run setup wizard.
 //
-// 4-step egui dialog:
+// 5-step egui dialog:
 //   1. Welcome
 //   2. Server Config + Test Connection
 //   3. Folder Setup (pick watch folder)
-//   4. Done
+//   4. Autostart (start with Windows?)
+//   5. Done
 //
 // Returns `Some(Config)` if the user completes the wizard, `None` if cancelled.
 
@@ -46,6 +47,7 @@ pub fn run_first_run_wizard() -> Option<Config> {
         api_key: String::new(),
         test_status: String::new(),
         watch_folder: default_pictures_folder(),
+        enable_autostart: true,
         result: None,
     };
 
@@ -83,6 +85,7 @@ enum WizardStep {
     Welcome,
     ServerConfig,
     FolderSetup,
+    Autostart,
     Done,
 }
 
@@ -93,6 +96,7 @@ struct WizardApp {
     api_key: String,
     test_status: String,
     watch_folder: String,
+    enable_autostart: bool,
     result: Option<Config>,
 }
 
@@ -120,6 +124,7 @@ impl WizardApp {
                 WizardStep::Welcome => self.show_welcome(ui, ctx),
                 WizardStep::ServerConfig => self.show_server_config(ui, ctx),
                 WizardStep::FolderSetup => self.show_folder_setup(ui, ctx),
+                WizardStep::Autostart => self.show_autostart(ui, ctx),
                 WizardStep::Done => self.show_done(ui, ctx),
             }
         });
@@ -234,6 +239,32 @@ impl WizardApp {
             if ui.button("Back").clicked() {
                 self.step = WizardStep::ServerConfig;
             }
+            if ui.button("Next").clicked() {
+                self.step = WizardStep::Autostart;
+            }
+            if ui.button("Cancel").clicked() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        });
+    }
+
+    fn show_autostart(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.heading("Start with Windows");
+        ui.add_space(8.0);
+        ui.label("ImmichSync can start automatically when you sign in.");
+        ui.add_space(16.0);
+
+        ui.checkbox(&mut self.enable_autostart, "Start ImmichSync with Windows");
+
+        ui.add_space(8.0);
+        ui.label("You can change this later in Settings.");
+
+        ui.add_space(24.0);
+
+        ui.horizontal(|ui| {
+            if ui.button("Back").clicked() {
+                self.step = WizardStep::FolderSetup;
+            }
             if ui.button("Finish").clicked() {
                 self.step = WizardStep::Done;
             }
@@ -253,9 +284,17 @@ impl WizardApp {
             ui.add_space(32.0);
 
             if ui.button("Start ImmichSync").clicked() {
+                // Apply autostart preference.
+                self.config.ui.start_with_windows = self.enable_autostart;
+
                 // Save config.
                 if let Err(e) = self.config.save() {
                     tracing::error!(error = %e, "Failed to save config from wizard");
+                }
+
+                // Set or clear the autostart registry key.
+                if let Err(e) = crate::platform::set_autostart(self.enable_autostart) {
+                    tracing::warn!(error = %e, "Failed to set autostart from wizard");
                 }
 
                 // Add the watch folder to the database.

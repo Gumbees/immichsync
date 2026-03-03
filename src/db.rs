@@ -1,8 +1,8 @@
 //! SQLite state database for ImmichSync.
 //!
-//! Opens (or creates) `%APPDATA%\ImmichSync\state.db`, enables WAL mode,
-//! and runs schema migrations on every startup.  All queue state transitions
-//! are wrapped in transactions.
+//! Opens (or creates) `%APPDATA%\bees-roadhouse\immichsync\state.db`, enables
+//! WAL mode, and runs schema migrations on every startup.  All queue state
+//! transitions are wrapped in transactions.
 
 use std::path::PathBuf;
 
