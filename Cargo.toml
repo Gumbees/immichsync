@@ -3,7 +3,7 @@ name = "immichsync"
 version = "0.1.0"
 edition = "2021"
 description = "Windows system tray app that syncs photos/videos to Immich"
-license = "LicenseRef-Proprietary"
+license = "GPL-3.0-only"
 
 [dependencies]
 # Async runtime

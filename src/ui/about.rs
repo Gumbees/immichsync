@@ -43,7 +43,10 @@ impl eframe::App for AboutApp {
                 ui.add_space(8.0);
                 ui.label("Watches folders and uploads photos/videos");
                 ui.label("to your Immich server automatically.");
-                ui.add_space(16.0);
+                ui.add_space(8.0);
+                ui.small("Copyright 2025-2026 Bee's Roadhouse LLC");
+                ui.small("Licensed under the GNU GPL v3");
+                ui.add_space(12.0);
 
                 if ui.button("Support ImmichSync").clicked() {
                     let _ = open::that(STRIPE_LINK);
