@@ -37,6 +37,7 @@ pub struct App {
     settings_rx: Option<std::sync::mpsc::Receiver<Config>>,
     runtime: Arc<tokio::runtime::Runtime>,
     last_stats_update: Instant,
+    last_trash_cleanup: Instant,
     paused: bool,
     /// Track previous syncing state to detect transitions for notifications.
     was_syncing: bool,
@@ -85,6 +86,7 @@ impl App {
             settings_rx: None,
             runtime,
             last_stats_update: Instant::now(),
+            last_trash_cleanup: Instant::now(),
             paused: false,
             was_syncing: false,
             notifications,
@@ -101,6 +103,14 @@ impl App {
             let db = self.db.inner().lock().unwrap();
             if let Err(e) = db.reset_stale_uploading() {
                 warn!(error = %e, "Failed to reset stale uploading entries");
+            }
+
+            // Clean up expired trash files on startup.
+            if let Ok(folders) = db.get_folders() {
+                crate::upload::worker::cleanup_trash(
+                    &folders,
+                    self.config.upload.trash_retention_days,
+                );
             }
         }
 
@@ -209,6 +219,18 @@ impl App {
 
             // Periodically refresh tray with queue statistics.
             self.update_tray_stats();
+
+            // Periodic trash cleanup (hourly).
+            if self.last_trash_cleanup.elapsed() >= Duration::from_secs(3600) {
+                self.last_trash_cleanup = Instant::now();
+                let db = self.db.inner().lock().unwrap();
+                if let Ok(folders) = db.get_folders() {
+                    crate::upload::worker::cleanup_trash(
+                        &folders,
+                        self.config.upload.trash_retention_days,
+                    );
+                }
+            }
 
             // Sleep to avoid busy-waiting (~20 wakes/sec is plenty).
             std::thread::sleep(Duration::from_millis(50));
@@ -561,8 +583,13 @@ async fn initial_scan(
 
                     let path = entry.path();
 
-                    // Recurse into subdirectories.
+                    // Recurse into subdirectories, skipping trash.
                     if path.is_dir() {
+                        if path.file_name().map_or(false, |n| {
+                            n == crate::upload::worker::TRASH_DIR_NAME
+                        }) {
+                            continue;
+                        }
                         dirs.push(path);
                         continue;
                     }

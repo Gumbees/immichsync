@@ -104,6 +104,11 @@ pub struct UploadConfig {
 
     /// Per-request HTTP timeout in seconds.
     pub timeout_secs: u64,
+
+    /// Number of days to retain files in `.immichsync-trash/` before
+    /// permanent deletion.  Only applies when a folder's post-upload
+    /// action is set to `Trash`.
+    pub trash_retention_days: u32,
 }
 
 impl Default for UploadConfig {
@@ -114,6 +119,7 @@ impl Default for UploadConfig {
             order: "newest_first".to_string(),
             max_retries: 5,
             timeout_secs: 300,
+            trash_retention_days: 14,
         }
     }
 }

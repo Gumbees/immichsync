@@ -404,6 +404,37 @@ async fn process_item(
                 }
             }
 
+            // Post-upload action: trash or delete the source file.
+            if let Some(folder_id) = entry.folder_id {
+                if let Ok(Some(folder)) = store.get_folder(folder_id) {
+                    match folder.post_upload {
+                        crate::db::PostUpload::Trash => {
+                            if let Err(e) = trash_file(&path, &folder.path) {
+                                warn!(
+                                    id = entry.id,
+                                    error = %e,
+                                    "Failed to trash file after upload"
+                                );
+                            } else {
+                                debug!(id = entry.id, "File moved to trash after upload");
+                            }
+                        }
+                        crate::db::PostUpload::Delete => {
+                            if let Err(e) = std::fs::remove_file(&path) {
+                                warn!(
+                                    id = entry.id,
+                                    error = %e,
+                                    "Failed to delete file after upload"
+                                );
+                            } else {
+                                debug!(id = entry.id, "File deleted after upload");
+                            }
+                        }
+                        crate::db::PostUpload::Keep => {}
+                    }
+                }
+            }
+
             if let Err(e) = store.mark_completed(
                 entry.id,
                 Some(&upload_result.asset_id),
@@ -489,7 +520,13 @@ fn resolve_album_name(
     match folder.album_mode {
         AlbumMode::None => None,
         AlbumMode::Folder => {
-            // Use the parent directory name of the file.
+            // Use the watched folder root's directory name.
+            std::path::Path::new(&folder.path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        }
+        AlbumMode::Subfolder => {
+            // Use the file's immediate parent directory name.
             file_path
                 .parent()
                 .and_then(|p| p.file_name())
@@ -513,6 +550,136 @@ fn sha1_of_string(s: &str) -> String {
     let mut h = Sha1::new();
     h.update(s.as_bytes());
     format!("{:x}", h.finalize())
+}
+
+// ─── Trash helpers ────────────────────────────────────────────────────────────
+
+/// The hidden directory name used for post-upload trash.
+pub const TRASH_DIR_NAME: &str = ".immichsync-trash";
+
+/// Move a file into `.immichsync-trash/` under the watched folder root,
+/// preserving relative subfolder structure.
+///
+/// E.g. if `folder_root` is `C:\Photos` and `file_path` is
+/// `C:\Photos\Vacation\img.jpg`, the file moves to
+/// `C:\Photos\.immichsync-trash\Vacation\img.jpg`.
+fn trash_file(file_path: &std::path::Path, folder_root: &str) -> anyhow::Result<()> {
+    let root = std::path::Path::new(folder_root);
+    let trash_root = root.join(TRASH_DIR_NAME);
+
+    // Compute relative path from folder root.
+    let relative = file_path
+        .strip_prefix(root)
+        .unwrap_or_else(|_| file_path.file_name().map(std::path::Path::new).unwrap_or(file_path));
+
+    let dest = trash_root.join(relative);
+
+    // Create parent directories.
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Try rename first (same volume), fall back to copy+delete.
+    if std::fs::rename(file_path, &dest).is_err() {
+        std::fs::copy(file_path, &dest)?;
+        std::fs::remove_file(file_path)?;
+    }
+
+    // Set the trash root directory as hidden (Windows).
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let wide: Vec<u16> = trash_root
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            windows::Win32::Storage::FileSystem::SetFileAttributesW(
+                windows::core::PCWSTR(wide.as_ptr()),
+                windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN,
+            )
+            .ok();
+        }
+    }
+
+    Ok(())
+}
+
+/// Delete files in `.immichsync-trash/` directories that are older than
+/// `retention_days`.  Removes empty directories afterwards.
+///
+/// Called on startup and periodically from the app's main loop.
+pub fn cleanup_trash(
+    folders: &[crate::db::WatchedFolder],
+    retention_days: u32,
+) {
+    use std::time::{Duration, SystemTime};
+
+    let max_age = Duration::from_secs(retention_days as u64 * 86400);
+    let now = SystemTime::now();
+
+    for folder in folders {
+        if folder.post_upload != crate::db::PostUpload::Trash {
+            continue;
+        }
+
+        let trash_root = std::path::Path::new(&folder.path).join(TRASH_DIR_NAME);
+        if !trash_root.exists() {
+            continue;
+        }
+
+        // Walk recursively and delete old files.
+        let mut dirs_to_check = Vec::new();
+        walk_and_delete(&trash_root, now, max_age, &mut dirs_to_check);
+
+        // Remove empty directories (deepest first).
+        dirs_to_check.sort_by(|a, b| b.components().count().cmp(&a.components().count()));
+        for dir in dirs_to_check {
+            if let Ok(mut entries) = std::fs::read_dir(&dir) {
+                if entries.next().is_none() {
+                    let _ = std::fs::remove_dir(&dir);
+                }
+            }
+        }
+    }
+}
+
+/// Recursively walk a directory, deleting files older than `max_age` and
+/// collecting subdirectory paths for later empty-dir cleanup.
+fn walk_and_delete(
+    dir: &std::path::Path,
+    now: std::time::SystemTime,
+    max_age: std::time::Duration,
+    dirs: &mut Vec<std::path::PathBuf>,
+) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            warn!(path = %dir.display(), error = %e, "Cannot read trash directory");
+            return;
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            dirs.push(path.clone());
+            walk_and_delete(&path, now, max_age, dirs);
+        } else if path.is_file() {
+            let should_delete = match path.metadata().and_then(|m| m.modified()) {
+                Ok(modified) => now.duration_since(modified).unwrap_or_default() > max_age,
+                Err(_) => false,
+            };
+            if should_delete {
+                if let Err(e) = std::fs::remove_file(&path) {
+                    warn!(path = %path.display(), error = %e, "Failed to delete expired trash file");
+                } else {
+                    debug!(path = %path.display(), "Deleted expired trash file");
+                }
+            }
+        }
+    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

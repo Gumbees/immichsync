@@ -57,6 +57,10 @@ fn main() -> anyhow::Result<()> {
     // If not running from the installed location, show an install dialog
     // (unless portable_mode is set). The dialog handles copying the exe,
     // creating shortcuts, and setting autostart.
+    //
+    // If an installed copy already exists with the same version, silently
+    // relaunch from the installed path (no dialog). If the running copy is
+    // newer, show an update dialog instead of the install dialog.
     match platform::is_running_installed() {
         Ok(false) => {
             // Check if user previously chose portable mode.
@@ -67,29 +71,65 @@ fn main() -> anyhow::Result<()> {
             if portable {
                 info!("Portable mode enabled, skipping install");
             } else {
-                info!("Not running from installed path, showing install dialog");
+                let installed_exe = platform::installed_exe_path().ok();
+                let installed_exists = installed_exe.as_ref().map_or(false, |p| p.exists());
 
-                let exe = std::env::current_exe().expect("current_exe");
-                let status = std::process::Command::new(&exe)
-                    .args(["--window", "install"])
-                    .status();
+                if installed_exists {
+                    if let Some((old_ver, new_ver)) = platform::install::is_update_available() {
+                        // Running version is newer — show update dialog.
+                        info!(
+                            from = %old_ver, to = %new_ver,
+                            "Newer version running, showing update dialog"
+                        );
 
-                match status {
-                    Ok(s) if s.code() == Some(0) => {
-                        // User clicked Install — relaunch from installed path.
-                        info!("Install complete, relaunching from installed path");
+                        let exe = std::env::current_exe().expect("current_exe");
+                        let status = std::process::Command::new(&exe)
+                            .args(["--window", "install-update", "--old-version", &old_ver])
+                            .status();
+
+                        match status {
+                            Ok(s) if s.code() == Some(0) => {
+                                info!("Update complete, relaunching from installed path");
+                                if let Err(e) = platform::relaunch_installed() {
+                                    tracing::warn!(error = %e, "Relaunch failed, continuing from current location");
+                                }
+                            }
+                            Ok(_) => {
+                                info!("User declined update, continuing from current location");
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "Failed to launch update dialog, continuing");
+                            }
+                        }
+                    } else {
+                        // Same version already installed — silently relaunch.
+                        info!("Same version already installed, relaunching from installed path");
                         if let Err(e) = platform::relaunch_installed() {
                             tracing::warn!(error = %e, "Relaunch failed, continuing from current location");
                         }
-                        // relaunch_installed calls process::exit on success.
-                        // If we get here, it failed — fall through.
                     }
-                    Ok(_) => {
-                        // User chose Run Portable (exit code 1) or closed dialog.
-                        info!("User chose portable mode, continuing from current location");
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Failed to launch install dialog, continuing");
+                } else {
+                    // No installed copy — show fresh install dialog.
+                    info!("Not running from installed path, showing install dialog");
+
+                    let exe = std::env::current_exe().expect("current_exe");
+                    let status = std::process::Command::new(&exe)
+                        .args(["--window", "install"])
+                        .status();
+
+                    match status {
+                        Ok(s) if s.code() == Some(0) => {
+                            info!("Install complete, relaunching from installed path");
+                            if let Err(e) = platform::relaunch_installed() {
+                                tracing::warn!(error = %e, "Relaunch failed, continuing from current location");
+                            }
+                        }
+                        Ok(_) => {
+                            info!("User chose portable mode, continuing from current location");
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to launch install dialog, continuing");
+                        }
                     }
                 }
             }
@@ -201,7 +241,17 @@ fn run_window_subprocess(window_type: &str) -> anyhow::Result<()> {
     match window_type {
         "install" => {
             info!("Subprocess: running install dialog");
-            ui::install::run_install_dialog();
+            ui::install::run_install_dialog(false, None);
+        }
+        "install-update" => {
+            info!("Subprocess: running update dialog");
+            // Parse --old-version from remaining args.
+            let args: Vec<String> = std::env::args().collect();
+            let old_version = args
+                .windows(2)
+                .find(|w| w[0] == "--old-version")
+                .map(|w| w[1].clone());
+            ui::install::run_install_dialog(true, old_version);
         }
         "wizard" => {
             info!("Subprocess: running first-run wizard");

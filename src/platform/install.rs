@@ -53,7 +53,8 @@ pub fn is_running_installed() -> Result<bool, InstallError> {
     Ok(current_canon == installed_canon)
 }
 
-/// Copy the running executable into the install directory.
+/// Copy the running executable into the install directory and write a
+/// `version.txt` file alongside it containing the current version.
 ///
 /// This is a no-op if the binary is already running from the installed path.
 /// On Windows the copy will fail if the destination file is locked by another
@@ -88,7 +89,57 @@ pub fn install_exe() -> Result<(), InstallError> {
         source,
     })?;
 
+    // Write version.txt alongside the installed exe.
+    write_version_file()?;
+
     Ok(())
+}
+
+/// Path to the `version.txt` file in the install directory.
+fn version_file_path() -> Result<PathBuf, InstallError> {
+    Ok(install_dir()?.join("version.txt"))
+}
+
+/// Write the current binary's version to `version.txt` in the install dir.
+fn write_version_file() -> Result<(), InstallError> {
+    let path = version_file_path()?;
+    std::fs::write(&path, running_version()).map_err(|source| InstallError::Copy {
+        dest: path,
+        source,
+    })?;
+    Ok(())
+}
+
+/// The version of the currently running binary (from Cargo.toml at build time).
+pub fn running_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+/// Read the version of the installed copy from `version.txt`.
+///
+/// Returns `None` if the file doesn't exist or can't be read.
+pub fn installed_version() -> Option<String> {
+    version_file_path()
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Check if the running version is newer than the installed version.
+///
+/// Returns `Some((installed_ver, running_ver))` if an update is available.
+/// Returns `None` if versions match, installed copy doesn't exist, or
+/// the running copy is older/same.
+pub fn is_update_available() -> Option<(String, String)> {
+    let installed = installed_version()?;
+    let running = running_version().to_string();
+
+    if installed != running && running > installed {
+        Some((installed, running))
+    } else {
+        None
+    }
 }
 
 /// Migrate data files from the legacy `%APPDATA%\ImmichSync\` directory to the

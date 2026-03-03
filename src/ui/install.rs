@@ -3,8 +3,11 @@
 // Offers three checkboxes (autostart, desktop shortcut, start menu shortcut)
 // and two buttons (Install, Run Portable).
 //
+// In update mode, the heading, button label, and description change to
+// reflect that an existing installation is being updated.
+//
 // Exit codes:
-//   0 = Install chosen — caller should relaunch from installed path
+//   0 = Install/Update chosen — caller should relaunch from installed path
 //   1 = Run Portable — caller should continue from current location
 
 use eframe::egui;
@@ -13,23 +16,35 @@ use crate::config::Config;
 
 /// Run the install dialog. Blocks the calling thread.
 ///
-/// Returns exit code `0` if the user clicked Install (exe was copied,
+/// When `is_update` is true, the dialog shows "Update ImmichSync" instead
+/// of "Install ImmichSync" and displays the version transition.
+///
+/// Returns exit code `0` if the user clicked Install/Update (exe was copied,
 /// shortcuts created), or `1` if Run Portable was chosen.
-pub fn run_install_dialog() {
+pub fn run_install_dialog(is_update: bool, old_version: Option<String>) {
     let install_dir = Config::data_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "(unknown)".to_string());
 
+    let title = if is_update {
+        "Update ImmichSync"
+    } else {
+        "Install ImmichSync"
+    };
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([420.0, 280.0])
-            .with_title("Install ImmichSync")
+            .with_inner_size([420.0, 300.0])
+            .with_title(title)
             .with_resizable(false),
         ..Default::default()
     };
 
     let app = InstallApp {
         install_dir,
+        is_update,
+        old_version,
+        new_version: crate::platform::install::running_version().to_string(),
         autostart: true,
         desktop_shortcut: true,
         start_menu_shortcut: true,
@@ -37,7 +52,7 @@ pub fn run_install_dialog() {
     };
 
     let _ = eframe::run_native(
-        "Install ImmichSync",
+        title,
         options,
         Box::new(|_cc| Ok(Box::new(app))),
     );
@@ -49,6 +64,9 @@ pub fn run_install_dialog() {
 
 struct InstallApp {
     install_dir: String,
+    is_update: bool,
+    old_version: Option<String>,
+    new_version: String,
     autostart: bool,
     desktop_shortcut: bool,
     start_menu_shortcut: bool,
@@ -61,10 +79,23 @@ impl eframe::App for InstallApp {
             ui.add_space(16.0);
 
             ui.vertical_centered(|ui| {
-                ui.heading("Install ImmichSync");
+                if self.is_update {
+                    ui.heading("Update ImmichSync");
+                } else {
+                    ui.heading("Install ImmichSync");
+                }
             });
 
             ui.add_space(12.0);
+
+            if self.is_update {
+                if let Some(ref old) = self.old_version {
+                    ui.label(format!("Updating from v{old} to v{}", self.new_version));
+                } else {
+                    ui.label(format!("Updating to v{}", self.new_version));
+                }
+                ui.add_space(4.0);
+            }
 
             ui.label("ImmichSync will be installed to:");
             ui.monospace(&self.install_dir);
@@ -82,6 +113,8 @@ impl eframe::App for InstallApp {
 
             ui.add_space(16.0);
 
+            let action_label = if self.is_update { "Update" } else { "Install" };
+
             ui.horizontal(|ui| {
                 // Right-align buttons by adding flexible space first.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -89,7 +122,7 @@ impl eframe::App for InstallApp {
                         self.do_portable(ctx);
                     }
 
-                    if ui.button("Install").clicked() {
+                    if ui.button(action_label).clicked() {
                         self.do_install(ctx);
                     }
                 });

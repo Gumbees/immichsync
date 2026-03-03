@@ -78,8 +78,11 @@ impl WatchMode {
 pub enum AlbumMode {
     /// Do not add to any album.
     None,
-    /// Create/use an album named after the parent folder.
+    /// Create/use an album named after the watched folder root directory.
     Folder,
+    /// Create/use an album named after the file's immediate parent subfolder
+    /// within the watched directory.
+    Subfolder,
     /// Create/use an album named `YYYY-MM` based on the file date.
     Date,
     /// Add to a specific user-chosen album.
@@ -91,6 +94,7 @@ impl AlbumMode {
         match self {
             AlbumMode::None => "none",
             AlbumMode::Folder => "folder",
+            AlbumMode::Subfolder => "subfolder",
             AlbumMode::Date => "date",
             AlbumMode::Fixed => "fixed",
         }
@@ -99,9 +103,40 @@ impl AlbumMode {
     pub fn from_str(s: &str) -> Self {
         match s {
             "folder" => AlbumMode::Folder,
+            "subfolder" => AlbumMode::Subfolder,
             "date" => AlbumMode::Date,
             "fixed" => AlbumMode::Fixed,
             _ => AlbumMode::None,
+        }
+    }
+}
+
+/// What to do with a source file after it has been successfully uploaded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PostUpload {
+    /// Leave the file in place (default).
+    Keep,
+    /// Move to `.immichsync-trash/` inside the watched folder root.
+    Trash,
+    /// Delete the file immediately after confirmed upload.
+    Delete,
+}
+
+impl PostUpload {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PostUpload::Keep => "keep",
+            PostUpload::Trash => "trash",
+            PostUpload::Delete => "delete",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "trash" => PostUpload::Trash,
+            "delete" => PostUpload::Delete,
+            _ => PostUpload::Keep,
         }
     }
 }
@@ -160,6 +195,8 @@ pub struct WatchedFolder {
     pub include_patterns: Option<String>,
     /// JSON array of glob patterns to exclude.
     pub exclude_patterns: Option<String>,
+    /// What to do with files after successful upload.
+    pub post_upload: PostUpload,
     /// `true` if the folder was added automatically (e.g. removable device).
     pub auto_added: bool,
     pub created_at: String,
@@ -273,6 +310,12 @@ impl Database {
             info!("Applied schema migration v1");
         }
 
+        if current_version < 2 {
+            self.migrate_v2()?;
+            self.set_schema_version(2)?;
+            info!("Applied schema migration v2");
+        }
+
         Ok(())
     }
 
@@ -337,6 +380,19 @@ impl Database {
             })
     }
 
+    /// v2: add `post_upload` column to `watched_folders`.
+    fn migrate_v2(&self) -> Result<(), DbError> {
+        self.conn
+            .execute_batch(
+                "ALTER TABLE watched_folders
+                 ADD COLUMN post_upload TEXT NOT NULL DEFAULT 'keep';",
+            )
+            .map_err(|e| DbError::Migration {
+                version: 2,
+                source: e,
+            })
+    }
+
     fn get_schema_version(&self) -> Result<u32, DbError> {
         let version: Option<String> = self
             .conn
@@ -397,8 +453,8 @@ impl Database {
         self.conn.execute(
             "INSERT INTO watched_folders
                 (path, label, enabled, watch_mode, poll_interval_secs,
-                 album_mode, auto_added, created_at, updated_at)
-             VALUES (?1, ?2, TRUE, 'native', 30, 'none', ?3, ?4, ?4)",
+                 album_mode, post_upload, auto_added, created_at, updated_at)
+             VALUES (?1, ?2, TRUE, 'native', 30, 'none', 'keep', ?3, ?4, ?4)",
             params![path, label, auto_added, now],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -418,7 +474,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, path, label, enabled, watch_mode, poll_interval_secs,
                     album_mode, album_name, include_patterns, exclude_patterns,
-                    auto_added, created_at, updated_at
+                    post_upload, auto_added, created_at, updated_at
              FROM watched_folders
              ORDER BY id",
         )?;
@@ -434,7 +490,7 @@ impl Database {
             .query_row(
                 "SELECT id, path, label, enabled, watch_mode, poll_interval_secs,
                         album_mode, album_name, include_patterns, exclude_patterns,
-                        auto_added, created_at, updated_at
+                        post_upload, auto_added, created_at, updated_at
                  FROM watched_folders
                  WHERE path = ?1",
                 params![path],
@@ -456,6 +512,7 @@ impl Database {
         album_name: Option<&str>,
         include_patterns: Option<&str>,
         exclude_patterns: Option<&str>,
+        post_upload: &PostUpload,
     ) -> Result<(), DbError> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
@@ -468,7 +525,8 @@ impl Database {
                  album_name = ?7,
                  include_patterns = ?8,
                  exclude_patterns = ?9,
-                 updated_at = ?10
+                 post_upload = ?10,
+                 updated_at = ?11
              WHERE id = ?1",
             params![
                 id,
@@ -480,6 +538,7 @@ impl Database {
                 album_name,
                 include_patterns,
                 exclude_patterns,
+                post_upload.as_str(),
                 now,
             ],
         )?;
@@ -669,7 +728,7 @@ impl Database {
             .query_row(
                 "SELECT id, path, label, enabled, watch_mode, poll_interval_secs,
                         album_mode, album_name, include_patterns, exclude_patterns,
-                        auto_added, created_at, updated_at
+                        post_upload, auto_added, created_at, updated_at
                  FROM watched_folders
                  WHERE id = ?1",
                 params![id],
@@ -734,9 +793,10 @@ fn map_watched_folder(row: &rusqlite::Row<'_>) -> rusqlite::Result<WatchedFolder
         album_name: row.get(7)?,
         include_patterns: row.get(8)?,
         exclude_patterns: row.get(9)?,
-        auto_added: row.get(10)?,
-        created_at: row.get(11)?,
-        updated_at: row.get(12)?,
+        post_upload: PostUpload::from_str(&row.get::<_, String>(10)?),
+        auto_added: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
     })
 }
 
@@ -971,6 +1031,7 @@ mod tests {
             None,
             None,
             None,
+            &PostUpload::Trash,
         )
         .unwrap();
 
@@ -980,6 +1041,7 @@ mod tests {
         assert_eq!(folder.watch_mode, WatchMode::Poll);
         assert_eq!(folder.poll_interval_secs, 60);
         assert_eq!(folder.album_mode, AlbumMode::Date);
+        assert_eq!(folder.post_upload, PostUpload::Trash);
     }
 
     // ── uploaded_files ───────────────────────────────────────────────────────

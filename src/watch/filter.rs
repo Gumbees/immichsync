@@ -117,6 +117,7 @@ impl FileFilter {
     /// Decide whether `path` should be included for upload consideration.
     ///
     /// Returns `false` for any of the following reasons:
+    /// - Path is inside a `.immichsync-trash` directory
     /// - Path has no file name component
     /// - File name is in the exclusion list
     /// - Extension is not in the allowed set
@@ -124,6 +125,14 @@ impl FileFilter {
     /// - A custom exclude glob matches the path
     /// - Custom include globs are configured and none of them match the path
     pub fn should_include(&self, path: &Path) -> bool {
+        // Skip anything inside the trash directory.
+        if path.components().any(|c| {
+            c.as_os_str() == crate::upload::worker::TRASH_DIR_NAME
+        }) {
+            debug!("Excluding (inside trash directory): {:?}", path);
+            return false;
+        }
+
         // Must have a file name
         let file_name = match path.file_name().and_then(|n| n.to_str()) {
             Some(n) => n,

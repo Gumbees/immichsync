@@ -15,7 +15,7 @@ use eframe::egui;
 use tracing::info;
 
 use crate::config::Config;
-use crate::db::{AlbumMode, Database, WatchMode, WatchedFolder};
+use crate::db::{AlbumMode, Database, PostUpload, WatchMode, WatchedFolder};
 
 /// Settings window state.
 ///
@@ -273,7 +273,7 @@ impl SettingsApp {
                             let album_mode_str = folder.album_mode.as_str();
                             let mut selected = album_mode_str.to_string();
                             egui::ComboBox::from_id_salt(format!("album_{}", folder.id))
-                                .width(100.0)
+                                .width(120.0)
                                 .selected_text(&selected)
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(
@@ -285,6 +285,11 @@ impl SettingsApp {
                                         &mut selected,
                                         "folder".to_string(),
                                         "Folder Name",
+                                    );
+                                    ui.selectable_value(
+                                        &mut selected,
+                                        "subfolder".to_string(),
+                                        "Subfolder Name",
                                     );
                                     ui.selectable_value(
                                         &mut selected,
@@ -307,6 +312,33 @@ impl SettingsApp {
                                     egui::TextEdit::singleline(name),
                                 );
                             }
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label("After Upload:");
+                            let post_str = folder.post_upload.as_str();
+                            let mut post_selected = post_str.to_string();
+                            egui::ComboBox::from_id_salt(format!("post_{}", folder.id))
+                                .width(120.0)
+                                .selected_text(&post_selected)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut post_selected,
+                                        "keep".to_string(),
+                                        "Keep",
+                                    );
+                                    ui.selectable_value(
+                                        &mut post_selected,
+                                        "trash".to_string(),
+                                        "Move to Trash",
+                                    );
+                                    ui.selectable_value(
+                                        &mut post_selected,
+                                        "delete".to_string(),
+                                        "Delete",
+                                    );
+                                });
+                            folder.post_upload = PostUpload::from_str(&post_selected);
                         });
                     });
                     ui.add_space(2.0);
@@ -528,6 +560,7 @@ impl SettingsApp {
                             album_name: None,
                             include_patterns: None,
                             exclude_patterns: None,
+                            post_upload: PostUpload::Keep,
                             auto_added: false,
                             created_at: String::new(),
                             updated_at: String::new(),
@@ -564,6 +597,7 @@ impl SettingsApp {
                     folder.album_name.as_deref(),
                     folder.include_patterns.as_deref(),
                     folder.exclude_patterns.as_deref(),
+                    &folder.post_upload,
                 ) {
                     tracing::warn!(id = folder.id, error = %e, "Failed to update folder");
                 }
