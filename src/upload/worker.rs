@@ -563,7 +563,7 @@ pub const TRASH_DIR_NAME: &str = ".immichsync-trash";
 /// E.g. if `folder_root` is `C:\Photos` and `file_path` is
 /// `C:\Photos\Vacation\img.jpg`, the file moves to
 /// `C:\Photos\.immichsync-trash\Vacation\img.jpg`.
-fn trash_file(file_path: &std::path::Path, folder_root: &str) -> anyhow::Result<()> {
+pub fn trash_file(file_path: &std::path::Path, folder_root: &str) -> anyhow::Result<()> {
     let root = std::path::Path::new(folder_root);
     let trash_root = root.join(TRASH_DIR_NAME);
 

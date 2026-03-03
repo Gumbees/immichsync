@@ -587,6 +587,32 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// Return file paths under `folder_path` that have been uploaded.
+    ///
+    /// Uses a prefix match on `file_path` (with trailing backslash) so only
+    /// files inside the folder are returned, not siblings with similar names.
+    pub fn get_uploaded_paths_in_folder(&self, folder_path: &str) -> Result<Vec<String>, DbError> {
+        // Ensure the prefix ends with a separator for exact directory matching.
+        let prefix = if folder_path.ends_with('\\') || folder_path.ends_with('/') {
+            folder_path.to_string()
+        } else {
+            format!("{folder_path}\\")
+        };
+
+        let mut stmt = self.conn.prepare(
+            "SELECT file_path FROM uploaded_files WHERE file_path LIKE ?1",
+        )?;
+        let rows = stmt.query_map(params![format!("{prefix}%")], |row| {
+            row.get::<_, String>(0)
+        })?;
+
+        let mut paths = Vec::new();
+        for row in rows {
+            paths.push(row?);
+        }
+        Ok(paths)
+    }
+
     // ── upload_queue ─────────────────────────────────────────────────────────
 
     /// Add a file to the upload queue with status `pending`.

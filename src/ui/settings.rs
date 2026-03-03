@@ -8,6 +8,7 @@
 // app via a `std::sync::mpsc::Sender<Config>` so the running app can
 // diff and apply the changes live.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
@@ -82,6 +83,7 @@ pub fn show_settings(config: Config, result_tx: Option<Sender<Config>>) {
         // Watch Folders tab
         folders,
         folder_to_remove: None,
+        apply_existing: HashMap::new(),
 
         // State
         active_tab: Tab::Connection,
@@ -135,6 +137,8 @@ struct SettingsApp {
     // Watch Folders tab
     folders: Vec<WatchedFolder>,
     folder_to_remove: Option<i64>,
+    /// Transient per-folder checkbox: apply trash/delete to already-uploaded files on Save.
+    apply_existing: HashMap<i64, bool>,
 
     // State
     active_tab: Tab,
@@ -340,6 +344,20 @@ impl SettingsApp {
                                 });
                             folder.post_upload = PostUpload::from_str(&post_selected);
                         });
+
+                        // Show checkbox to apply action to already-uploaded files.
+                        if folder.post_upload != PostUpload::Keep {
+                            let apply = self.apply_existing.entry(folder.id).or_insert(false);
+                            let label = match folder.post_upload {
+                                PostUpload::Trash => "Also trash already-uploaded files",
+                                PostUpload::Delete => "Also delete already-uploaded files",
+                                PostUpload::Keep => unreachable!(),
+                            };
+                            ui.checkbox(apply, label);
+                        } else {
+                            // Reset if user switches back to Keep.
+                            self.apply_existing.remove(&folder.id);
+                        }
                     });
                     ui.add_space(2.0);
                 }
@@ -601,7 +619,64 @@ impl SettingsApp {
                 ) {
                     tracing::warn!(id = folder.id, error = %e, "Failed to update folder");
                 }
+
+                // Apply trash/delete to already-uploaded files if the user checked the box.
+                if self.apply_existing.get(&folder.id).copied().unwrap_or(false) {
+                    self.apply_post_upload_to_existing(&db, folder);
+                }
             }
+        }
+    }
+
+    /// Trash or delete files in `folder` that have already been uploaded.
+    fn apply_post_upload_to_existing(&self, db: &Database, folder: &WatchedFolder) {
+        let paths = match db.get_uploaded_paths_in_folder(&folder.path) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(folder = %folder.path, error = %e,
+                    "Failed to query uploaded files for existing cleanup");
+                return;
+            }
+        };
+
+        let mut count = 0u32;
+        for path_str in &paths {
+            let path = std::path::Path::new(path_str);
+            if !path.exists() {
+                continue;
+            }
+
+            match folder.post_upload {
+                PostUpload::Trash => {
+                    if let Err(e) = crate::upload::worker::trash_file(path, &folder.path) {
+                        tracing::warn!(file = %path_str, error = %e,
+                            "Failed to trash existing uploaded file");
+                    } else {
+                        count += 1;
+                    }
+                }
+                PostUpload::Delete => {
+                    if let Err(e) = std::fs::remove_file(path) {
+                        tracing::warn!(file = %path_str, error = %e,
+                            "Failed to delete existing uploaded file");
+                    } else {
+                        count += 1;
+                    }
+                }
+                PostUpload::Keep => {}
+            }
+        }
+
+        if count > 0 {
+            let action = match folder.post_upload {
+                PostUpload::Trash => "trashed",
+                PostUpload::Delete => "deleted",
+                PostUpload::Keep => return,
+            };
+            info!(
+                folder = %folder.path, count,
+                "Applied {action} to already-uploaded files"
+            );
         }
     }
 }
