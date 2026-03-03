@@ -89,7 +89,7 @@ impl eframe::App for InstallApp {
             ui.add_space(12.0);
 
             if self.is_update {
-                if let Some(ref old) = self.old_version {
+                if let Some(ref old) = self.old_version.as_ref().filter(|v| *v != "unknown") {
                     ui.label(format!("Updating from v{old} to v{}", self.new_version));
                 } else {
                     ui.label(format!("Updating to v{}", self.new_version));

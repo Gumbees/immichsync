@@ -75,7 +75,22 @@ fn main() -> anyhow::Result<()> {
                 let installed_exists = installed_exe.as_ref().map_or(false, |p| p.exists());
 
                 if installed_exists {
-                    if let Some((old_ver, new_ver)) = platform::install::is_update_available() {
+                    // Determine if the installed copy needs updating.
+                    // Three cases:
+                    //   1. version.txt missing → pre-version-tracking install, treat as update
+                    //   2. version.txt exists, running is newer → show update dialog
+                    //   3. version.txt exists, same version → silent relaunch
+                    let installed_ver = platform::install::installed_version();
+                    let update_info = match &installed_ver {
+                        None => {
+                            // No version.txt — installed copy predates version tracking.
+                            // Treat as update from unknown version.
+                            Some((String::from("unknown"), platform::install::running_version().to_string()))
+                        }
+                        Some(_) => platform::install::is_update_available(),
+                    };
+
+                    if let Some((old_ver, new_ver)) = update_info {
                         // Running version is newer — show update dialog.
                         info!(
                             from = %old_ver, to = %new_ver,
