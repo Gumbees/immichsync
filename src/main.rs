@@ -58,13 +58,14 @@ fn main() -> anyhow::Result<()> {
     }
 
     // ── Install dialog + relaunch ────────────────────────────────────────
-    // If not running from the installed location, show an install dialog
-    // (unless portable_mode is set). The dialog handles copying the exe,
-    // creating shortcuts, and setting autostart.
+    // If not running from the installed location, show an install/update
+    // dialog DIRECTLY in this process (not as a subprocess). Running it
+    // inline guarantees the window gets foreground focus — subprocess
+    // windows on Windows often open behind other windows without focus.
     //
-    // If an installed copy already exists with the same version, silently
-    // relaunch from the installed path (no dialog). If the running copy is
-    // newer, show an update dialog instead of the install dialog.
+    // This is safe because the main process hasn't created a winit
+    // EventLoop yet, and after this point it only uses a Win32 message
+    // pump for the tray app.
     match platform::is_running_installed() {
         Ok(false) => {
             // Check if user previously chose portable mode.
@@ -80,44 +81,32 @@ fn main() -> anyhow::Result<()> {
 
                 if installed_exists {
                     // Determine if the installed copy needs updating.
-                    // Three cases:
-                    //   1. version.txt missing → pre-version-tracking install, treat as update
-                    //   2. version.txt exists, running is newer → show update dialog
-                    //   3. version.txt exists, same version → silent relaunch
                     let installed_ver = platform::install::installed_version();
                     let update_info = match &installed_ver {
                         None => {
-                            // No version.txt — installed copy predates version tracking.
-                            // Treat as update from unknown version.
                             Some((String::from("unknown"), platform::install::running_version().to_string()))
                         }
                         Some(_) => platform::install::is_update_available(),
                     };
 
                     if let Some((old_ver, new_ver)) = update_info {
-                        // Running version is newer — show update dialog.
+                        // Running version is newer — show update dialog inline.
                         info!(
                             from = %old_ver, to = %new_ver,
-                            "Newer version running, showing update dialog"
+                            "Newer version running, showing install-update dialog"
                         );
 
-                        let exe = std::env::current_exe().expect("current_exe");
-                        let status = std::process::Command::new(&exe)
-                            .args(["--window", "install-update", "--old-version", &old_ver])
-                            .status();
+                        let result = ui::install::run_install_dialog(true, Some(old_ver));
 
-                        match status {
-                            Ok(s) if s.code() == Some(0) => {
+                        match result {
+                            ui::install::InstallResult::Installed => {
                                 info!("Update complete, relaunching from installed path");
                                 if let Err(e) = platform::relaunch_installed() {
                                     tracing::warn!(error = %e, "Relaunch failed, continuing from current location");
                                 }
                             }
-                            Ok(_) => {
+                            ui::install::InstallResult::Portable => {
                                 info!("User declined update, continuing from current location");
-                            }
-                            Err(e) => {
-                                tracing::warn!(error = %e, "Failed to launch update dialog, continuing");
                             }
                         }
                     } else {
@@ -128,45 +117,20 @@ fn main() -> anyhow::Result<()> {
                         }
                     }
                 } else {
-                    // No installed copy — show fresh install dialog.
-                    let exe = std::env::current_exe().expect("current_exe");
-                    info!(
-                        exe = %exe.display(),
-                        "Not running from installed path, spawning install dialog subprocess"
-                    );
+                    // No installed copy — show fresh install dialog inline.
+                    info!("Not running from installed path, showing install dialog");
 
-                    let child = std::process::Command::new(&exe)
-                        .args(["--window", "install"])
-                        .stderr(std::process::Stdio::piped())
-                        .spawn();
+                    let result = ui::install::run_install_dialog(false, None);
 
-                    match child {
-                        Ok(child) => {
-                            info!(pid = child.id(), "Install dialog subprocess spawned");
-                            match child.wait_with_output() {
-                                Ok(output) => {
-                                    let code = output.status.code();
-                                    info!(?code, "Install dialog subprocess exited");
-                                    if !output.stderr.is_empty() {
-                                        let stderr = String::from_utf8_lossy(&output.stderr);
-                                        tracing::debug!(stderr = %stderr, "Install dialog stderr");
-                                    }
-                                    if code == Some(0) {
-                                        info!("Install complete, relaunching from installed path");
-                                        if let Err(e) = platform::relaunch_installed() {
-                                            tracing::warn!(error = %e, "Relaunch failed, continuing from current location");
-                                        }
-                                    } else {
-                                        info!("User chose portable mode, continuing from current location");
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::warn!(error = %e, "Failed to wait for install dialog subprocess");
-                                }
+                    match result {
+                        ui::install::InstallResult::Installed => {
+                            info!("Install complete, relaunching from installed path");
+                            if let Err(e) = platform::relaunch_installed() {
+                                tracing::warn!(error = %e, "Relaunch failed, continuing from current location");
                             }
                         }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "Failed to spawn install dialog subprocess");
+                        ui::install::InstallResult::Portable => {
+                            info!("User chose portable mode, continuing from current location");
                         }
                     }
                 }
@@ -368,7 +332,7 @@ fn run_window_subprocess(window_type: &str) -> anyhow::Result<()> {
     match window_type {
         "install" => {
             info!("Subprocess: running install dialog");
-            ui::install::run_install_dialog(false, None);
+            ui::install::run_install_dialog_subprocess(false, None);
         }
         "install-update" => {
             info!("Subprocess: running update dialog");
@@ -378,7 +342,7 @@ fn run_window_subprocess(window_type: &str) -> anyhow::Result<()> {
                 .windows(2)
                 .find(|w| w[0] == "--old-version")
                 .map(|w| w[1].clone());
-            ui::install::run_install_dialog(true, old_version);
+            ui::install::run_install_dialog_subprocess(true, old_version);
         }
         "wizard" => {
             info!("Subprocess: running first-run wizard");

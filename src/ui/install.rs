@@ -5,23 +5,34 @@
 //
 // In update mode, the heading, button label, and description change to
 // reflect that an existing installation is being updated.
-//
-// Exit codes:
-//   0 = Install/Update chosen — caller should relaunch from installed path
-//   1 = Run Portable — caller should continue from current location
+
+use std::sync::{Arc, Mutex};
 
 use eframe::egui;
 
 use crate::config::Config;
+
+/// Result of the install dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallResult {
+    /// User clicked Install/Update — exe was copied, shortcuts created.
+    Installed,
+    /// User clicked Run Portable or closed the window.
+    Portable,
+}
 
 /// Run the install dialog. Blocks the calling thread.
 ///
 /// When `is_update` is true, the dialog shows "Update ImmichSync" instead
 /// of "Install ImmichSync" and displays the version transition.
 ///
-/// Returns exit code `0` if the user clicked Install/Update (exe was copied,
-/// shortcuts created), or `1` if Run Portable was chosen.
-pub fn run_install_dialog(is_update: bool, old_version: Option<String>) {
+/// Returns `InstallResult::Installed` if the user clicked Install/Update,
+/// or `InstallResult::Portable` if Run Portable was chosen or the window
+/// was closed.
+///
+/// When called from a subprocess (`--window install`), use
+/// `run_install_dialog_subprocess` instead, which calls `process::exit`.
+pub fn run_install_dialog(is_update: bool, old_version: Option<String>) -> InstallResult {
     let install_dir = Config::data_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "(unknown)".to_string());
@@ -36,9 +47,12 @@ pub fn run_install_dialog(is_update: bool, old_version: Option<String>) {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([420.0, 300.0])
             .with_title(title)
-            .with_resizable(false),
+            .with_resizable(false)
+            .with_always_on_top(),
         ..Default::default()
     };
+
+    let result = Arc::new(Mutex::new(InstallResult::Portable));
 
     let app = InstallApp {
         install_dir,
@@ -49,6 +63,7 @@ pub fn run_install_dialog(is_update: bool, old_version: Option<String>) {
         desktop_shortcut: true,
         start_menu_shortcut: true,
         status: String::new(),
+        result: result.clone(),
     };
 
     let _ = eframe::run_native(
@@ -57,9 +72,20 @@ pub fn run_install_dialog(is_update: bool, old_version: Option<String>) {
         Box::new(|_cc| Ok(Box::new(app))),
     );
 
-    // If eframe exits without calling process::exit (user closed the window),
-    // treat it like Run Portable.
-    std::process::exit(1);
+    // Return the result set by the dialog.
+    let r = *result.lock().unwrap();
+    r
+}
+
+/// Run the install dialog in subprocess mode (calls `process::exit`).
+///
+/// Used when invoked via `--window install` or `--window install-update`.
+pub fn run_install_dialog_subprocess(is_update: bool, old_version: Option<String>) {
+    let result = run_install_dialog(is_update, old_version);
+    match result {
+        InstallResult::Installed => std::process::exit(0),
+        InstallResult::Portable => std::process::exit(1),
+    }
 }
 
 struct InstallApp {
@@ -71,6 +97,7 @@ struct InstallApp {
     desktop_shortcut: bool,
     start_menu_shortcut: bool,
     status: String,
+    result: Arc<Mutex<InstallResult>>,
 }
 
 impl eframe::App for InstallApp {
@@ -182,8 +209,8 @@ impl InstallApp {
             }
         }
 
+        *self.result.lock().unwrap() = InstallResult::Installed;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        std::process::exit(0);
     }
 
     fn do_portable(&mut self, ctx: &egui::Context) {
@@ -195,7 +222,7 @@ impl InstallApp {
             }
         }
 
+        *self.result.lock().unwrap() = InstallResult::Portable;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        std::process::exit(1);
     }
 }
