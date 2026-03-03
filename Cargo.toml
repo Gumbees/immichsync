@@ -14,7 +14,7 @@ notify = "7"
 notify-debouncer-full = "0.4"
 
 # HTTP client
-reqwest = { version = "0.12", features = ["multipart", "json", "stream"] }
+reqwest = { version = "0.12", features = ["multipart", "json", "stream", "blocking"] }
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -86,6 +86,9 @@ winrt-notification = "0.5"
 
 # Open URLs in browser
 open = "5"
+
+# Semantic versioning
+semver = "1"
 
 # Streaming I/O utilities (bandwidth throttling)
 tokio-util = { version = "0.7", features = ["io"] }

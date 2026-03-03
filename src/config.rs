@@ -195,6 +195,9 @@ pub struct AdvancedConfig {
     /// Debounce window in milliseconds before a file is considered stable
     /// enough to queue for upload.
     pub write_settle_ms: u64,
+
+    /// Automatically check GitHub for new releases.
+    pub check_for_updates: bool,
 }
 
 impl Default for AdvancedConfig {
@@ -203,6 +206,7 @@ impl Default for AdvancedConfig {
             log_level: "info".to_string(),
             poll_interval_secs: 30,
             write_settle_ms: 2000,
+            check_for_updates: true,
         }
     }
 }

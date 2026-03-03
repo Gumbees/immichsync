@@ -7,6 +7,7 @@ pub mod install;
 pub mod notifications;
 pub mod settings;
 pub mod tray;
+pub mod update;
 pub mod upload_log;
 
 // Re-export the primary public surface so callers can write `ui::TrayApp`

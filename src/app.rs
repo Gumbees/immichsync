@@ -17,6 +17,7 @@ use crate::api::ImmichClient;
 use crate::config::Config;
 use crate::db::DbStore;
 use crate::ui::tray::{TrayAction, TrayApp, TrayState};
+use crate::updater::{self, UpdateCheckResult, UpdateInfo};
 use crate::upload::queue::{QueueStore, UploadQueue};
 use crate::upload::worker::AssetUploader;
 use crate::upload::UploadPipeline;
@@ -45,6 +46,12 @@ pub struct App {
     notifications: crate::ui::notifications::Notifications,
     /// Tracks whether each UI window type is currently open.
     window_open: WindowOpenTracker,
+    /// Receiver for async update check results.
+    update_rx: Option<std::sync::mpsc::Receiver<UpdateCheckResult>>,
+    /// When the last update check was performed.
+    last_update_check: Instant,
+    /// Cached update info when an update is available.
+    pending_update: Option<UpdateInfo>,
 }
 
 /// Tracks whether each type of UI window is currently open, preventing
@@ -54,6 +61,7 @@ pub struct WindowOpenTracker {
     pub settings: Arc<AtomicBool>,
     pub about: Arc<AtomicBool>,
     pub upload_log: Arc<AtomicBool>,
+    pub update: Arc<AtomicBool>,
 }
 
 impl WindowOpenTracker {
@@ -62,6 +70,7 @@ impl WindowOpenTracker {
             settings: Arc::new(AtomicBool::new(false)),
             about: Arc::new(AtomicBool::new(false)),
             upload_log: Arc::new(AtomicBool::new(false)),
+            update: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -91,6 +100,9 @@ impl App {
             was_syncing: false,
             notifications,
             window_open: WindowOpenTracker::new(),
+            update_rx: None,
+            last_update_check: Instant::now(),
+            pending_update: None,
         }
     }
 
@@ -161,6 +173,11 @@ impl App {
         // Set up the watch engine and bridge task.
         self.start_watch_engine()?;
 
+        // Schedule the first automatic update check after a startup delay.
+        if self.config.advanced.check_for_updates {
+            self.schedule_update_check(true);
+        }
+
         Ok(())
     }
 
@@ -215,6 +232,16 @@ impl App {
                 if let Ok(new_config) = rx.try_recv() {
                     self.apply_new_config(new_config);
                 }
+            }
+
+            // Poll for update check results.
+            self.poll_update_check();
+
+            // Periodic re-check for updates (every 24h).
+            if self.config.advanced.check_for_updates
+                && self.last_update_check.elapsed() >= updater::CHECK_INTERVAL
+            {
+                self.schedule_update_check(false);
             }
 
             // Periodically refresh tray with queue statistics.
@@ -393,6 +420,13 @@ impl App {
                 let flag = self.window_open.upload_log.clone();
                 spawn_window_subprocess("log", flag, None);
             }
+            TrayAction::CheckForUpdates => {
+                info!("Manual update check requested");
+                self.schedule_update_check(false);
+            }
+            TrayAction::OpenUpdateDialog => {
+                self.open_update_dialog();
+            }
             TrayAction::Quit => {
                 // Handled in run() directly.
             }
@@ -481,6 +515,123 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Spawn an async update check on the tokio runtime.
+    ///
+    /// If `with_delay` is true, waits `STARTUP_DELAY` before checking.
+    fn schedule_update_check(&mut self, with_delay: bool) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.update_rx = Some(rx);
+        self.last_update_check = Instant::now();
+
+        self.runtime.spawn(async move {
+            if with_delay {
+                tokio::time::sleep(updater::STARTUP_DELAY).await;
+            }
+            let result = updater::check_for_update().await;
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Poll the update check channel for results.
+    fn poll_update_check(&mut self) {
+        let result = match self.update_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            Some(r) => r,
+            None => return,
+        };
+
+        match result {
+            UpdateCheckResult::Available(info) => {
+                info!(
+                    current = %info.current_version,
+                    new = %info.new_version,
+                    "Update available"
+                );
+
+                // Show toast notification.
+                self.notifications.notify_update_available(&info);
+
+                // Update tray menu.
+                if let Some(ref mut tray) = self.tray {
+                    tray.set_update_available(Some(&info.new_version));
+                }
+
+                self.pending_update = Some(info);
+            }
+            UpdateCheckResult::UpToDate => {
+                info!("Already on latest version");
+            }
+            UpdateCheckResult::Failed(msg) => {
+                warn!(error = %msg, "Update check failed");
+            }
+        }
+    }
+
+    /// Open the update dialog as a subprocess.
+    fn open_update_dialog(&mut self) {
+        let Some(ref info) = self.pending_update else {
+            info!("No pending update to show");
+            return;
+        };
+
+        if self.window_open.update.swap(true, Ordering::SeqCst) {
+            info!("Update dialog already open, ignoring");
+            return;
+        }
+
+        // Serialize UpdateInfo to a temp JSON file.
+        let temp_dir = std::env::temp_dir();
+        let info_path = temp_dir.join("immichsync_update_info.json");
+        let info_json = match serde_json::to_string(info) {
+            Ok(j) => j,
+            Err(e) => {
+                warn!(error = %e, "Failed to serialize update info");
+                self.window_open.update.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
+        if let Err(e) = std::fs::write(&info_path, &info_json) {
+            warn!(error = %e, "Failed to write update info file");
+            self.window_open.update.store(false, Ordering::SeqCst);
+            return;
+        }
+
+        let flag = self.window_open.update.clone();
+        let info_path_str = info_path.display().to_string();
+
+        std::thread::spawn(move || {
+            let exe = match crate::platform::install::installed_exe_path() {
+                Ok(p) if p.exists() => p,
+                _ => match std::env::current_exe() {
+                    Ok(e) => e,
+                    Err(e) => {
+                        warn!(error = %e, "Failed to get current exe path");
+                        flag.store(false, Ordering::SeqCst);
+                        return;
+                    }
+                },
+            };
+
+            info!("Spawning update dialog subprocess");
+            match std::process::Command::new(&exe)
+                .args(["--window", "update", "--update-info", &info_path_str])
+                .status()
+            {
+                Ok(status) => {
+                    info!(?status, "Update dialog subprocess exited");
+                    if status.code() == Some(0) {
+                        // Update was applied — relaunch.
+                        info!("Update applied, relaunching");
+                        updater::relaunch_self();
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to spawn update dialog");
+                }
+            }
+            flag.store(false, Ordering::SeqCst);
+        });
     }
 
     /// Stop all background work.

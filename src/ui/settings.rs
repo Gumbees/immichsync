@@ -79,6 +79,7 @@ pub fn show_settings(config: Config, result_tx: Option<Sender<Config>>) {
         show_notifications: config.ui.show_notifications,
         notify_on_complete: config.ui.notification_on_complete,
         write_settle_ms: config.advanced.write_settle_ms,
+        check_for_updates: config.advanced.check_for_updates,
 
         // Watch Folders tab
         folders,
@@ -133,6 +134,7 @@ struct SettingsApp {
     show_notifications: bool,
     notify_on_complete: bool,
     write_settle_ms: u64,
+    check_for_updates: bool,
 
     // Watch Folders tab
     folders: Vec<WatchedFolder>,
@@ -460,6 +462,7 @@ impl SettingsApp {
         ui.checkbox(&mut self.autostart, "Start with Windows");
         ui.checkbox(&mut self.minimize_to_tray, "Minimize to system tray");
         ui.checkbox(&mut self.show_notifications, "Show notifications");
+        ui.checkbox(&mut self.check_for_updates, "Automatically check for updates");
         ui.add_enabled_ui(self.show_notifications, |ui| {
             ui.indent("notify_indent", |ui| {
                 ui.checkbox(&mut self.notify_on_complete, "Notify when uploads complete");
@@ -520,6 +523,7 @@ impl SettingsApp {
         self.config.advanced.poll_interval_secs = self.poll_interval;
         self.config.advanced.log_level = self.log_level.clone();
         self.config.advanced.write_settle_ms = self.write_settle_ms;
+        self.config.advanced.check_for_updates = self.check_for_updates;
 
         self.config.ui.start_with_windows = self.autostart;
         self.config.ui.minimize_to_tray = self.minimize_to_tray;

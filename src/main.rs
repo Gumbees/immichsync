@@ -3,6 +3,7 @@
 mod app;
 mod config;
 mod db;
+mod updater;
 
 mod api;
 mod platform;
@@ -23,6 +24,9 @@ fn main() -> anyhow::Result<()> {
         // Non-fatal: log to stderr since tracing isn't up yet.
         eprintln!("Warning: legacy data migration failed: {e}");
     }
+
+    // Clean up leftover .exe.old from a previous self-update.
+    updater::cleanup_old_exe();
 
     // ── Logging ──────────────────────────────────────────────────────────
     let data_dir = config::Config::data_dir()?;
@@ -280,6 +284,20 @@ fn run_window_subprocess(window_type: &str) -> anyhow::Result<()> {
         "about" => {
             info!("Subprocess: running about dialog");
             ui::about::show_about();
+        }
+        "update" => {
+            info!("Subprocess: running update dialog");
+            let args: Vec<String> = std::env::args().collect();
+            let info_path = args
+                .windows(2)
+                .find(|w| w[0] == "--update-info")
+                .map(|w| w[1].clone())
+                .unwrap_or_default();
+            if info_path.is_empty() {
+                tracing::error!("--update-info path required for update window");
+                std::process::exit(1);
+            }
+            ui::update::run_update_dialog(&info_path);
         }
         "log" => {
             info!("Subprocess: running upload log");

@@ -132,11 +132,14 @@ pub fn installed_version() -> Option<String> {
 /// Returns `None` if versions match, installed copy doesn't exist, or
 /// the running copy is older/same.
 pub fn is_update_available() -> Option<(String, String)> {
-    let installed = installed_version()?;
-    let running = running_version().to_string();
+    let installed_str = installed_version()?;
+    let running_str = running_version().to_string();
 
-    if installed != running && running > installed {
-        Some((installed, running))
+    let installed_ver = semver::Version::parse(&installed_str).ok()?;
+    let running_ver = semver::Version::parse(&running_str).ok()?;
+
+    if running_ver > installed_ver {
+        Some((installed_str, running_str))
     } else {
         None
     }
