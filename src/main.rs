@@ -15,7 +15,27 @@ use std::sync::Arc;
 
 use tracing::info;
 
+/// Direct file-based debug log that bypasses the non_blocking tracing buffer.
+/// This ensures messages are written even if the process exits abruptly.
+fn debug_log(msg: &str) {
+    use std::io::Write;
+    let path = std::env::temp_dir().join("immichsync_debug.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(f, "[{}] [pid={}] {msg}",
+            chrono::Local::now().format("%H:%M:%S%.3f"),
+            std::process::id(),
+        );
+    }
+}
+
 fn main() -> anyhow::Result<()> {
+    debug_log(&format!("=== ImmichSync starting === version={} args={:?}",
+        env!("CARGO_PKG_VERSION"), std::env::args().collect::<Vec<_>>()));
+
     // ── Legacy data migration ────────────────────────────────────────────
     // Move config/db/logs from old %APPDATA%\ImmichSync\ to the new
     // %APPDATA%\bees-roadhouse\immichsync\ path before anything else
@@ -54,6 +74,7 @@ fn main() -> anyhow::Result<()> {
     // `--window install` would try to show the install dialog recursively.
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 2 && args[1] == "--window" {
+        debug_log(&format!("Subprocess mode: --window {}", &args[2]));
         return run_window_subprocess(&args[2]);
     }
 
@@ -64,18 +85,23 @@ fn main() -> anyhow::Result<()> {
     //
     // We call AllowSetForegroundWindow before spawning so the subprocess
     // can bring its window to the foreground on Windows.
+    let current_exe_path = std::env::current_exe().unwrap_or_default();
+    debug_log(&format!("Install check: current_exe={}", current_exe_path.display()));
     match platform::is_running_installed() {
         Ok(false) => {
+            debug_log("is_running_installed=false");
             // Check if user previously chose portable mode.
             let portable = config::Config::load()
                 .map(|c| c.ui.portable_mode)
                 .unwrap_or(false);
 
             if portable {
+                debug_log("Portable mode, skipping install");
                 info!("Portable mode enabled, skipping install");
             } else {
                 let installed_exe = platform::installed_exe_path().ok();
                 let installed_exists = installed_exe.as_ref().map_or(false, |p| p.exists());
+                debug_log(&format!("installed_exe={:?}, exists={installed_exists}", installed_exe));
 
                 if installed_exists {
                     // Determine if the installed copy needs updating.
@@ -86,41 +112,52 @@ fn main() -> anyhow::Result<()> {
                         }
                         Some(_) => platform::install::is_update_available(),
                     };
+                    debug_log(&format!("installed_ver={installed_ver:?}, update_info={update_info:?}"));
 
                     if let Some((old_ver, new_ver)) = update_info {
                         info!(
                             from = %old_ver, to = %new_ver,
                             "Newer version running, spawning install-update dialog"
                         );
+                        debug_log(&format!("Spawning install-update dialog: {old_ver} -> {new_ver}"));
                         match spawn_install_dialog(&["--window", "install-update", "--old-version", &old_ver]) {
                             Some(0) => {
+                                debug_log("Install dialog returned 0 (installed), relaunching");
                                 info!("Update complete, relaunching from installed path");
                                 if let Err(e) = platform::relaunch_installed() {
+                                    debug_log(&format!("Relaunch failed: {e}"));
                                     tracing::warn!(error = %e, "Relaunch failed, continuing from current location");
                                 }
                             }
-                            _ => {
+                            other => {
+                                debug_log(&format!("Install dialog returned {other:?}, continuing"));
                                 info!("User declined update, continuing from current location");
                             }
                         }
                     } else {
                         // Same version already installed — silently relaunch.
+                        debug_log("Same version installed, relaunching");
                         info!("Same version already installed, relaunching from installed path");
                         if let Err(e) = platform::relaunch_installed() {
+                            debug_log(&format!("Relaunch failed: {e}"));
                             tracing::warn!(error = %e, "Relaunch failed, continuing from current location");
                         }
                     }
                 } else {
                     // No installed copy — show fresh install dialog.
+                    debug_log("No installed exe, spawning fresh install dialog");
                     info!("Not running from installed path, spawning install dialog");
                     match spawn_install_dialog(&["--window", "install"]) {
                         Some(0) => {
+                            debug_log("Install dialog returned 0 (installed), relaunching");
                             info!("Install complete, relaunching from installed path");
                             if let Err(e) = platform::relaunch_installed() {
+                                debug_log(&format!("Relaunch failed: {e}"));
                                 tracing::warn!(error = %e, "Relaunch failed, continuing from current location");
                             }
                         }
-                        _ => {
+                        other => {
+                            debug_log(&format!("Install dialog returned {other:?}, continuing portable"));
                             info!("User chose portable mode, continuing from current location");
                         }
                     }
@@ -128,9 +165,11 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Err(e) => {
+            debug_log(&format!("is_running_installed error: {e}"));
             tracing::warn!(error = %e, "Could not check install status, continuing");
         }
         Ok(true) => {
+            debug_log("is_running_installed=true, checking for updates");
             // Running from installed location — check for updates before starting the tray app.
             info!("Running from installed path, checking for updates");
             check_for_update_on_startup();
@@ -140,9 +179,13 @@ fn main() -> anyhow::Result<()> {
     info!("ImmichSync starting");
 
     // ── Single-instance check ────────────────────────────────────────────
+    debug_log("Acquiring single-instance mutex");
     let _instance = match platform::SingleInstance::acquire() {
         Ok(Some(guard)) => guard,
-        Ok(None) => return Ok(()),
+        Ok(None) => {
+            debug_log("Another instance is running, exiting");
+            return Ok(());
+        }
         Err(e) => {
             tracing::error!("Single-instance check failed: {}", e);
             return Err(e.into());
@@ -347,15 +390,18 @@ fn spawn_install_dialog(args: &[&str]) -> Option<i32> {
     }
 
     let exe = std::env::current_exe().expect("current_exe");
+    debug_log(&format!("spawn_install_dialog: exe={}, args={args:?}", exe.display()));
     info!(exe = %exe.display(), args = ?args, "Spawning install dialog subprocess");
 
     match std::process::Command::new(&exe).args(args).status() {
         Ok(status) => {
             let code = status.code();
+            debug_log(&format!("spawn_install_dialog: subprocess exited with code={code:?}"));
             info!(code = ?code, "Install dialog subprocess exited");
             code
         }
         Err(e) => {
+            debug_log(&format!("spawn_install_dialog: FAILED to spawn: {e}"));
             tracing::error!(error = %e, "Failed to spawn install dialog subprocess");
             None
         }
