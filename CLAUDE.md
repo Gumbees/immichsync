@@ -89,13 +89,27 @@ cargo test
 
 ## Git Workflow
 
-Follows the standard branching strategy in the DevOps book:
+Follows the DevOps book standards: [Branching Strategy](https://kb.beesroadhouse.com/books/developer-operations-devops/page/branching-strategy), [Change Taxonomy](https://kb.beesroadhouse.com/books/developer-operations-devops/page/change-taxonomy), [PR Merge Strategy](https://kb.beesroadhouse.com/books/developer-operations-devops/page/pr-merge-strategy), [Issue Workflow](https://kb.beesroadhouse.com/books/developer-operations-devops/page/issue-workflow).
 
-- `development` is the default branch (always shippable, unprotected)
-- `release` is protected; PRs from `development` cut releases
+- `development` is the default branch (always shippable, direct pushes allowed)
+- `release` is the only protected branch (org ruleset)
 - Work branches: `feature/`, `improvement/`, `refactor/`, `bug/`
-- Commits: conventional style (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`)
 - One discrete change per PR; rebase onto `development` before merge
+- **Squash-and-merge** for work-branch → `development`. **Merge commit** for `development` → `release` (squashing the release transition breaks ancestor relationship)
+- `BREAKING:` prefix in PR title forces a major version bump regardless of type
+
+### Two-Tier Labels
+
+Every PR and issue carries exactly **one type label + one category label**:
+
+| Branch prefix | Type | Category | Default semver bump |
+|---|---|---|---|
+| `bug/` | `type:problem` | `category:bug` | Patch |
+| `refactor/` | `type:problem` | `category:refactor` | Patch (or minor if external behavior changes) |
+| `feature/` | `type:enhancement` | `category:feature` | Minor |
+| `improvement/` | `type:enhancement` | `category:improvement` | Minor |
+
+Issue templates in `.github/ISSUE_TEMPLATE/` apply the right pair automatically. State labels (`question`, `duplicate`, `wontfix`, `invalid`, `help wanted`) are kept; the GitHub default `bug` / `enhancement` / `documentation` / `good first issue` labels are removed in favor of the two-tier scheme.
 
 Planned work belongs in [GitHub issues](https://github.com/bees-roadhouse/immichsync/issues), not in `PLAN.md` or other tree docs. PLAN.md describes what is, not what will be.
 

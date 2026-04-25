@@ -1,13 +1,14 @@
-name: Enhancement
-description: New feature, improvement, or change request
-title: "[enhancement] "
-labels: [enhancement]
+name: Feature request
+description: New capability that doesn't exist yet
+title: "[feature] "
+labels: ["type:enhancement", "category:feature"]
 body:
   - type: textarea
     id: what
     attributes:
       label: What
-      description: One or two sentences. What should change?
+      description: One or two sentences. What new capability should ImmichSync gain?
+      placeholder: "Add support for uploading to multiple Immich servers simultaneously."
     validations:
       required: true
 
@@ -15,7 +16,7 @@ body:
     id: why
     attributes:
       label: Why
-      description: What problem does this solve? What's the current pain point or missing capability?
+      description: What problem does this solve? Who would use it and in what scenario?
     validations:
       required: true
 
@@ -31,5 +32,6 @@ body:
     id: alternatives
     attributes:
       label: Alternatives considered (optional)
+      description: Other approaches you weighed and why this one is better.
     validations:
       required: false

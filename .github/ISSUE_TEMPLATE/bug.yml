@@ -1,7 +1,7 @@
 name: Bug report
-description: Something isn't working correctly
+description: Implementation mistake — code doesn't do what it was designed to do
 title: "[bug] "
-labels: [bug]
+labels: ["type:problem", "category:bug"]
 body:
   - type: textarea
     id: what-happened
