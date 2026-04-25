@@ -1,12 +1,19 @@
 use chrono::{DateTime, Utc};
+use futures_util::StreamExt;
 use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::time::Duration;
 use tokio::fs;
-use tokio::io::AsyncReadExt;
+use tokio_util::io::ReaderStream;
 use tracing::{debug, instrument, warn};
 
 use super::{ApiError, ImmichClient};
+
+/// Chunk size for streaming file uploads. 64 KB balances syscall overhead
+/// against memory residency — at any moment only one chunk is in flight,
+/// so a 4 GB video uses ~64 KB instead of 4 GB.
+const UPLOAD_CHUNK_SIZE: usize = 64 * 1024;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -106,16 +113,39 @@ impl ImmichClient {
         modified_at: DateTime<Utc>,
     ) -> Result<UploadResult, ApiError> {
         let path = file_path.as_ref();
-        debug!("reading file for upload");
 
-        let bytes = if self.bandwidth_limit_bps > 0 {
-            // Throttled read: read in chunks with sleeps to stay under the limit.
-            throttled_read(path, self.bandwidth_limit_bps).await
-                .map_err(|e| ApiError::Unexpected(format!("failed to read file: {e}")))?
+        // Stat the file to get its length for the multipart Content-Length.
+        let metadata = fs::metadata(path)
+            .await
+            .map_err(|e| ApiError::Unexpected(format!("failed to stat file: {e}")))?;
+        let file_size = metadata.len();
+
+        // Open the file and wrap it in a chunked stream. At any moment only
+        // one chunk is held in memory, regardless of file size.
+        let file = fs::File::open(path)
+            .await
+            .map_err(|e| ApiError::Unexpected(format!("failed to open file: {e}")))?;
+        let reader_stream = ReaderStream::with_capacity(file, UPLOAD_CHUNK_SIZE);
+
+        debug!(file_size, "streaming asset upload");
+
+        // Optionally throttle: sleep between chunks proportional to chunk size.
+        // Token-bucket would be more accurate but a per-chunk sleep is
+        // sufficient for the user-facing "limit upload speed" feature.
+        let body = if self.bandwidth_limit_bps > 0 {
+            let bps = self.bandwidth_limit_bps;
+            let throttled = reader_stream.then(move |chunk| async move {
+                if let Ok(ref bytes) = chunk {
+                    let sleep_ms = (bytes.len() as u64 * 1000) / bps;
+                    if sleep_ms > 0 {
+                        tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
+                    }
+                }
+                chunk
+            });
+            reqwest::Body::wrap_stream(throttled)
         } else {
-            fs::read(path)
-                .await
-                .map_err(|e| ApiError::Unexpected(format!("failed to read file: {e}")))?
+            reqwest::Body::wrap_stream(reader_stream)
         };
 
         // Derive a filename for the multipart part; fall back to "asset" if
@@ -130,7 +160,7 @@ impl ImmichClient {
         // strictly require a correct value.
         let mime = mime_from_extension(path);
 
-        let file_part = Part::bytes(bytes)
+        let file_part = Part::stream_with_length(body, file_size)
             .file_name(filename)
             .mime_str(mime)
             .map_err(|e| ApiError::Unexpected(format!("invalid MIME type: {e}")))?;
@@ -289,39 +319,6 @@ impl crate::upload::worker::AssetUploader for ImmichClient {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Read a file with bandwidth throttling.
-///
-/// Reads in 64 KB chunks, sleeping between chunks to stay under the
-/// specified bytes-per-second limit.
-async fn throttled_read(path: &Path, bytes_per_sec: u64) -> std::io::Result<Vec<u8>> {
-    const CHUNK_SIZE: usize = 64 * 1024; // 64 KB chunks
-
-    let meta = fs::metadata(path).await?;
-    let file_size = meta.len() as usize;
-
-    let mut file = fs::File::open(path).await?;
-    let mut buffer = Vec::with_capacity(file_size);
-    let mut chunk = vec![0u8; CHUNK_SIZE];
-
-    loop {
-        let n = file.read(&mut chunk).await?;
-        if n == 0 {
-            break;
-        }
-        buffer.extend_from_slice(&chunk[..n]);
-
-        // Calculate how long to sleep to stay under the rate limit.
-        if bytes_per_sec > 0 {
-            let sleep_ms = (n as u64 * 1000) / bytes_per_sec;
-            if sleep_ms > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)).await;
-            }
-        }
-    }
-
-    Ok(buffer)
-}
 
 /// Return a best-effort MIME type string for a file based on its extension.
 ///
