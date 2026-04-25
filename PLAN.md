@@ -258,12 +258,7 @@ Reference: [Immich OAuth docs](https://docs.immich.app/administration/oauth/),
 
 ## Remaining Work
 
-- Per-folder include/exclude glob patterns in the Settings UI
-- Watcher health monitoring and auto-restart
-- GitHub Actions CI/CD
-- Code signing
-- Screenshots / marketing materials
-- Community outreach
+Tracked in the [issue tracker](https://github.com/bees-roadhouse/immichsync/issues?q=is%3Aopen+label%3Aenhancement) under the `enhancement` label.
 
 ---
 

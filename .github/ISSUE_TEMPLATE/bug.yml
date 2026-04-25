@@ -1,0 +1,58 @@
+name: Bug report
+description: Something isn't working correctly
+title: "[bug] "
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug. What did you do, what did you expect, what actually happened?
+      placeholder: "When I tried to upload a 4 GB video, ImmichSync's RAM grew to 8 GB before the upload started."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ImmichSync settings
+        2. Add a folder containing a >2 GB video
+        3. Watch RAM usage in Task Manager
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: ImmichSync version
+      description: From the About dialog or `Cargo.toml`.
+      placeholder: "0.1.7"
+    validations:
+      required: true
+
+  - type: input
+    id: immich-version
+    attributes:
+      label: Immich server version
+      placeholder: "1.140.0"
+    validations:
+      required: false
+
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 23H2"
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log excerpts
+      description: From `%APPDATA%\bees-roadhouse\immichsync\logs\immichsync.log`. Strip any sensitive paths/server URLs/API keys.
+      render: text
+    validations:
+      required: false

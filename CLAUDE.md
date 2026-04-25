@@ -89,11 +89,15 @@ cargo test
 
 ## Git Workflow
 
-- `main` branch is release-ready
-- Feature branches: `feature/description`
-- Bug fix branches: `fix/description`
+Follows the standard branching strategy in the DevOps book:
+
+- `development` is the default branch (always shippable, unprotected)
+- `release` is protected; PRs from `development` cut releases
+- Work branches: `feature/`, `improvement/`, `refactor/`, `bug/`
 - Commits: conventional style (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`)
-- PRs: one feature or fix per PR
+- One discrete change per PR; rebase onto `development` before merge
+
+Planned work belongs in [GitHub issues](https://github.com/bees-roadhouse/immichsync/issues), not in `PLAN.md` or other tree docs. PLAN.md describes what is, not what will be.
 
 ## Key Design Decisions
 

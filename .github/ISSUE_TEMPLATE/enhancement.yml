@@ -1,0 +1,35 @@
+name: Enhancement
+description: New feature, improvement, or change request
+title: "[enhancement] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What
+      description: One or two sentences. What should change?
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: What problem does this solve? What's the current pain point or missing capability?
+    validations:
+      required: true
+
+  - type: textarea
+    id: how
+    attributes:
+      label: Sketch of approach (optional)
+      description: If you have an idea of how to implement it, drop it here. Skip if unsure.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered (optional)
+    validations:
+      required: false

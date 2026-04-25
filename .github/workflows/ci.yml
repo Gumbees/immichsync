@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [development, release]
+  pull_request:
+    branches: [development, release]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+
+jobs:
+  build-and-test:
+    name: Build & test
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Repo's .cargo/config.toml hardcodes a target-dir for a specific
+          # developer machine; override here with a CI-friendly path so the
+          # cache key matches between runs.
+          workspaces: ". -> target"
+        env:
+          CARGO_TARGET_DIR: target
+
+      - name: Build (release)
+        run: cargo build --release --locked
+        env:
+          CARGO_TARGET_DIR: target
+
+      - name: Test
+        run: cargo test --locked
+        env:
+          CARGO_TARGET_DIR: target
+
+      - name: Clippy (informational)
+        # Not gating yet — codebase has known dead-code warnings to clean up.
+        # Track in repo issues; flip to `-D warnings` once clean.
+        continue-on-error: true
+        run: cargo clippy --all-targets -- -W clippy::all
+        env:
+          CARGO_TARGET_DIR: target
+
+      - name: Format check (informational)
+        # Not gating yet — see issue tracker for a planned `cargo fmt` sweep.
+        continue-on-error: true
+        run: cargo fmt --all -- --check
