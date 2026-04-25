@@ -165,8 +165,13 @@ impl UploadPipeline {
         self.worker.stop();
 
         if let Some(handle) = self.worker_handle.take() {
-            // Give the worker a moment to finish its current upload.
-            let timeout = std::time::Duration::from_secs(30);
+            // Cap the wait at 3s. Windows Task Manager / WM_CLOSE allows
+            // ~5s before escalating to TerminateProcess; staying under
+            // that lets the process exit cleanly when the user clicks
+            // "End task". In-flight uploads abandoned here will be reset
+            // from "uploading" back to "pending" by reset_stale_uploading
+            // on next startup, so nothing is lost — just retried.
+            let timeout = std::time::Duration::from_secs(3);
             match tokio::time::timeout(timeout, handle).await {
                 Ok(Ok(())) => {
                     info!("Upload worker stopped cleanly");
@@ -176,7 +181,7 @@ impl UploadPipeline {
                 }
                 Err(_) => {
                     tracing::warn!(
-                        "Upload worker did not stop within {:?}; abandoning",
+                        "Upload worker did not stop within {:?}; abandoning (in-flight uploads will resume on next launch)",
                         timeout
                     );
                 }
