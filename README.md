@@ -43,7 +43,7 @@ Run the installer or extract the portable ZIP. That's it.
 - Windows 10 or 11
 
 ```bash
-git clone https://github.com/gumbees/immichsync.git
+git clone https://github.com/bees-roadhouse/immichsync.git
 cd immichsync
 cargo build --release
 ```
