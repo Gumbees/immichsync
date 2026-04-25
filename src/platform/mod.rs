@@ -9,6 +9,7 @@ pub mod encryption;
 pub mod install;
 pub mod known_folders;
 pub mod shortcuts;
+pub mod shutdown;
 pub mod single_instance;
 
 /// Application User Model ID for toast notifications and Start Menu shortcuts.
