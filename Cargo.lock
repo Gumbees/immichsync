@@ -2352,7 +2352,7 @@ dependencies = [
 
 [[package]]
 name = "immichsync"
-version = "0.1.6"
+version = "0.1.8"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2362,6 +2362,7 @@ dependencies = [
  "dirs 5.0.1",
  "eframe",
  "egui",
+ "futures-util",
  "glob",
  "hostname",
  "kamadak-exif",

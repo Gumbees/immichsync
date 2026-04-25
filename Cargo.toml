@@ -1,6 +1,6 @@
 [package]
 name = "immichsync"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 description = "Windows system tray app that syncs photos/videos to Immich"
 license = "GPL-3.0-only"
@@ -90,8 +90,11 @@ open = "5"
 # Semantic versioning
 semver = "1"
 
-# Streaming I/O utilities (bandwidth throttling)
+# Streaming I/O utilities (bandwidth throttling, file → byte stream for uploads)
 tokio-util = { version = "0.7", features = ["io"] }
+
+# Stream combinators (for throttled upload bodies)
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 # Temp files in tests
 [dev-dependencies]
