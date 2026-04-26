@@ -118,6 +118,15 @@ impl App {
     ///
     /// Must be called on the main thread before [`run`].
     pub fn init(&mut self) -> anyhow::Result<()> {
+        // Register the hidden top-level shutdown window before anything else.
+        // Without it, Task Manager → "End task" can't find a window to send
+        // WM_CLOSE to and goes straight to TerminateProcess, leaving
+        // in-flight uploads orphaned. The window must be created on the
+        // same thread that runs the main message pump (this thread).
+        if let Err(e) = crate::platform::shutdown::install() {
+            warn!(error = %e, "Failed to register shutdown window — Task Manager 'End task' may force-kill");
+        }
+
         // Recover any entries stuck in "uploading" state from a previous crash.
         {
             let db = self.db.inner().lock().unwrap();
