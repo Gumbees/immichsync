@@ -1,0 +1,122 @@
+name: Release
+
+# Two ways to publish a release:
+#
+# 1. Push to `release` (the canonical flow). The author has bumped
+#    Cargo.toml in their PR per the Change Lifecycle "Rule 2: author
+#    bumps version in same change". This workflow reads Cargo.toml,
+#    creates a v{version} tag (if it doesn't already exist), builds the
+#    Windows binary, and attaches it to a GitHub Release with that tag.
+#
+# 2. Push tag `v*.*.*` (manual or back-compat path). Builds the binary
+#    and attaches to a GitHub Release matching the tag. Verifies the tag
+#    matches Cargo.toml at the tagged commit so a stale tag can't ship a
+#    mismatched binary.
+#
+# Both paths converge on the same softprops/action-gh-release step. The
+# release-branch path is idempotent: re-running on a push to release
+# whose Cargo.toml version already has a tag will skip tag creation but
+# still ensure the GitHub Release exists with the binary attached.
+
+on:
+  push:
+    branches: [release]
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    name: Build and publish Windows binary
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+        env:
+          CARGO_TARGET_DIR: target
+
+      # Resolve which version to publish. Tag-triggered runs use the tag.
+      # Branch-triggered runs use Cargo.toml.
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          $manifestVersion = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $tagVersion = "${{ github.ref_name }}".TrimStart("v")
+            if ($tagVersion -ne $manifestVersion) {
+              Write-Error "Tag $tagVersion does not match Cargo.toml version $manifestVersion"
+              exit 1
+            }
+            $version = $tagVersion
+            $tag = "${{ github.ref_name }}"
+            $needsTag = "false"
+          } else {
+            $version = $manifestVersion
+            $tag = "v$version"
+            # Will be checked below.
+            $needsTag = "unknown"
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag=$tag"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "needs_tag=$needsTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Resolved version $version (tag $tag)"
+
+      # Branch-triggered runs only: check if the tag already exists.
+      - name: Check existing tag
+        if: github.ref_type == 'branch'
+        id: tag_check
+        shell: pwsh
+        run: |
+          git fetch --tags
+          $tag = "${{ steps.version.outputs.tag }}"
+          $exists = (git tag --list $tag) -ne $null -and (git tag --list $tag).Length -gt 0
+          if ($exists) {
+            Write-Host "Tag $tag already exists; skipping tag creation."
+            "needs_tag=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            Write-Host "Tag $tag will be created."
+            "needs_tag=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
+      - name: Create and push tag
+        if: github.ref_type == 'branch' && steps.tag_check.outputs.needs_tag == 'true'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          TAG="${{ steps.version.outputs.tag }}"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Build release binary
+        run: cargo build --release --locked
+        env:
+          CARGO_TARGET_DIR: target
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ImmichSync ${{ steps.version.outputs.tag }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          files: target/release/immichsync.exe
+          fail_on_unmatched_files: true
